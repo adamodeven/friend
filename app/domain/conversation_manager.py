@@ -75,6 +75,10 @@ class ConversationManager:
                 )
                 attachments_created.append(att)
 
+            # Persist inbound capture immediately so it is visible in admin logs
+            # even if downstream LLM/state steps time out or fail.
+            session.commit()
+
             intent = self.intent_extractor.extract(payload.body, timezone=user.timezone)
             state_outcome = self.state_engine.apply_intent(
                 session,

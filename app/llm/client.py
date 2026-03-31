@@ -29,7 +29,7 @@ class OllamaAdapter:
     def json_completion(self, *, system: str, user: str, model: str | None = None) -> dict[str, Any] | None:
         if not self._enabled:
             return None
-        payload = {
+        payload_chat = {
             "model": model or self._text_model,
             "stream": False,
             "format": "json",
@@ -38,7 +38,15 @@ class OllamaAdapter:
                 {"role": "user", "content": user},
             ],
         }
-        content = self._chat_content(payload)
+        content = self._chat_content(payload_chat)
+        if content is None:
+            payload_generate = {
+                "model": model or self._text_model,
+                "stream": False,
+                "format": "json",
+                "prompt": f"{system}\n\n{user}",
+            }
+            content = self._generate_content(payload_generate)
         if not content:
             return None
         parsed = self._parse_json(content)
@@ -49,7 +57,7 @@ class OllamaAdapter:
     def text_completion(self, *, system: str, user: str, model: str | None = None) -> str | None:
         if not self._enabled:
             return None
-        payload = {
+        payload_chat = {
             "model": model or self._text_model,
             "stream": False,
             "messages": [
@@ -57,7 +65,15 @@ class OllamaAdapter:
                 {"role": "user", "content": user},
             ],
         }
-        return self._chat_content(payload)
+        content = self._chat_content(payload_chat)
+        if content is not None:
+            return content
+        payload_generate = {
+            "model": model or self._text_model,
+            "stream": False,
+            "prompt": f"{system}\n\n{user}",
+        }
+        return self._generate_content(payload_generate)
 
     def vision_json(
         self,
@@ -81,6 +97,15 @@ class OllamaAdapter:
             ],
         }
         content = self._chat_content(payload)
+        if content is None:
+            payload_generate = {
+                "model": self._vision_model,
+                "stream": False,
+                "format": "json",
+                "prompt": f"{system}\n\n{user_prompt}",
+                "images": [image_b64],
+            }
+            content = self._generate_content(payload_generate)
         if not content:
             return None
         parsed = self._parse_json(content)
@@ -94,6 +119,8 @@ class OllamaAdapter:
             try:
                 with httpx.Client(timeout=self._timeout) as client:
                     response = client.post(f"{self._base_url}/api/chat", json=payload)
+                    if response.status_code == 404:
+                        return None
                     response.raise_for_status()
                     data = response.json()
                 return (data.get("message") or {}).get("content")
@@ -101,6 +128,21 @@ class OllamaAdapter:
                 last_exc = exc
         if last_exc:  # pragma: no cover
             logger.exception("ollama chat failed: %s", last_exc)
+        return None
+
+    def _generate_content(self, payload: dict[str, Any]) -> str | None:
+        last_exc: Exception | None = None
+        for _ in range(2):
+            try:
+                with httpx.Client(timeout=self._timeout) as client:
+                    response = client.post(f"{self._base_url}/api/generate", json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                return data.get("response")
+            except Exception as exc:  # pragma: no cover
+                last_exc = exc
+        if last_exc:  # pragma: no cover
+            logger.exception("ollama generate failed: %s", last_exc)
         return None
 
     def _download_image_as_base64(self, image_url: str) -> str | None:

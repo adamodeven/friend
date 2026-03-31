@@ -46,7 +46,7 @@ class TimelineService:
         )
         tasks = list(session.execute(stmt).scalars().all())
         if not tasks:
-            return "clean slate. let's add the next task you care about."
+            return "you're clear rn. drop the next task + deadline and i'll lock in the plan."
         top = tasks[0]
         if top.status == TaskStatus.blocked:
             return f"next hour move: unblock '{top.title}' first so downstream stuff can start."
@@ -68,4 +68,3 @@ class TimelineService:
             .order_by(Task.deadline_at.asc())
         )
         return list(session.execute(stmt).scalars().all())
-

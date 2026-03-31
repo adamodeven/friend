@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone as dt_timezone
 
 from app.core.config import get_settings
@@ -63,18 +64,50 @@ class ReplyComposer:
 
     @staticmethod
     def _fallback_text(intent: IntentResult, action_summary: str) -> str:
+        cleaned = ReplyComposer._humanize_action_summary(action_summary)
         if intent.needs_clarification and intent.clarification_question:
             return intent.clarification_question
         if intent.intent == "timeline_query":
-            return f"bet. here's the plan: {action_summary}"
+            return f"bet, here's what i got:\n{cleaned}"
         if intent.intent == "status_query":
-            return f"quick version: {action_summary}"
+            return f"quick version: {cleaned}"
         if intent.intent == "context_signal":
             return "all good, i’ll chill reminders for now and hit you after that."
         if intent.intent == "complete_task":
-            return f"nice. marked that progress. {action_summary}"
+            return f"nice, logged that progress. {cleaned}"
         if intent.intent == "add_task":
-            return f"locked in. added it. {action_summary}"
+            return f"locked in, added it. {cleaned}"
         if intent.intent == "reflection":
-            return f"noted. let's fix the pattern: {action_summary}"
-        return action_summary or "got it. updated and tracking."
+            return f"noted. let's fix the pattern: {cleaned}"
+        if cleaned:
+            lead = ReplyComposer._pick_variant(
+                cleaned,
+                ["got you.", "bet.", "say less."],
+            )
+            return f"{lead} {cleaned}"
+        return "i'm here. text me what you need done and when it's due."
+
+    @staticmethod
+    def _pick_variant(seed: str, options: list[str]) -> str:
+        if not options:
+            return ""
+        digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
+        idx = int(digest[:8], 16) % len(options)
+        return options[idx]
+
+    @staticmethod
+    def _humanize_action_summary(text: str) -> str:
+        if not text:
+            return ""
+        cleaned = " ".join(text.split())
+        replacements = {
+            "clean slate. let's add the next task you care about.": "you're clear rn. send the next task + deadline and i’ll track it.",
+            "next hour move:": "next move:",
+            "today is clear right now. we can pick one high-impact move.": "today looks open rn. send what matters most and i'll slot it.",
+            "week is light in the system rn. ping me anything new and i'll slot it.": "week looks light rn. send anything new and i'll slot it fast.",
+        }
+        lowered = cleaned.lower()
+        for source, target in replacements.items():
+            if lowered == source:
+                return target
+        return cleaned

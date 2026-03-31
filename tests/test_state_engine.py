@@ -34,3 +34,15 @@ def test_context_signal_creates_schedule_block(db_session):
     assert block is not None
     assert block.block_type == "in_class"
 
+
+def test_status_query_meta_gets_direct_explanation(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    engine = StateEngine()
+    intent = IntentResult(intent="status_query", confidence=0.9)
+    summary = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="are these canned responses or live ai generated?",
+    )
+    assert "hybrid" in summary.lower()

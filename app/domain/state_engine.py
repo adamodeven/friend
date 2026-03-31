@@ -84,10 +84,17 @@ class StateEngine:
                 action_summary = self.timeline.build_today_view(session, user.id, user.timezone)
 
         elif intent.intent == "status_query":
-            action_summary = (
-                "i keep your task graph live over text: deadlines, blockers, dependencies, reminders, and replanning. "
-                "drop anything you need done and i'll track it + push follow-through."
-            )
+            lowered = raw_text.lower()
+            if any(token in lowered for token in ["canned", "live ai", "ai generated", "bot", "automated"]):
+                action_summary = (
+                    "real answer: it's a hybrid. your tasks/reminders/state are deterministic from the database, "
+                    "and wording is ai-generated when the model is available. if model is down, it falls back to built-in replies."
+                )
+            else:
+                action_summary = (
+                    "i keep your task graph live over text: deadlines, blockers, dependencies, reminders, and replanning. "
+                    "drop anything you need done and i'll track it + push follow-through."
+                )
 
         elif intent.intent == "context_signal":
             starts, ends = time_window_for_context(intent.context_signal or raw_text, user.timezone)

@@ -70,7 +70,7 @@ class ReplyComposer:
         if intent.intent == "timeline_query":
             return f"bet, here's what i got:\n{cleaned}"
         if intent.intent == "status_query":
-            return f"quick version: {cleaned}"
+            return cleaned or "i run your accountability flow over text and keep state synced."
         if intent.intent == "context_signal":
             return "all good, i’ll chill reminders for now and hit you after that."
         if intent.intent == "complete_task":

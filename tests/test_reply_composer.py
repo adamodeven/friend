@@ -12,6 +12,5 @@ def test_fallback_general_chat_is_humanized():
 def test_fallback_status_query_is_not_empty():
     intent = IntentResult(intent="status_query", confidence=0.9)
     text = ReplyComposer._fallback_text(intent, "i keep your task graph live")
-    assert "quick version" in text.lower()
+    assert text.strip()
     assert "task graph" in text.lower()
-

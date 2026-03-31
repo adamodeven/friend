@@ -25,3 +25,9 @@ def test_extract_status_query():
     extractor = IntentExtractor()
     result = extractor.extract("what do you do?", "America/New_York")
     assert result.intent == "status_query"
+
+
+def test_extract_meta_architecture_query_as_status_query():
+    extractor = IntentExtractor()
+    result = extractor.extract("are these canned responses or live ai generated?", "America/New_York")
+    assert result.intent == "status_query"

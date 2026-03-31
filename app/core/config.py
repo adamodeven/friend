@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
 
-    llm_provider: str = "none"
+    llm_provider: str = "ollama"
     ollama_base_url: str = "http://localhost:11434"
     ollama_text_model: str = "llama3.1:8b"
     ollama_vision_model: str = "llava:13b"

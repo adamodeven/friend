@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+import os
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+
+# Keep tests deterministic and offline.
+os.environ.setdefault("LLM_PROVIDER", "none")
 
 from app.db.base import Base
 from app.db.models import ProfileStyle, User, UserProfile
@@ -32,4 +36,3 @@ def db_session() -> Generator[Session, None, None]:
         yield session
     finally:
         session.close()
-

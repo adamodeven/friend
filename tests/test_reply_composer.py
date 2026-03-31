@@ -7,8 +7,8 @@ from app.schemas.reply import ReplyBrief
 
 
 class FakeAdapter:
-    def __init__(self, responses: list[dict | None], enabled: bool = True) -> None:
-        self.responses = responses
+    def __init__(self, text_responses: list[str | None], enabled: bool = True) -> None:
+        self.text_responses = text_responses
         self.enabled = enabled
         self.calls = 0
         self.text_calls = 0
@@ -20,11 +20,10 @@ class FakeAdapter:
         user: str,
         model: str | None = None,
         options: dict | None = None,
+        request_timeout_seconds: float | None = None,
     ):
         self.calls += 1
-        if not self.responses:
-            return None
-        return self.responses.pop(0)
+        return None
 
     def text_completion(  # noqa: ANN001
         self,
@@ -33,9 +32,12 @@ class FakeAdapter:
         user: str,
         model: str | None = None,
         options: dict | None = None,
+        request_timeout_seconds: float | None = None,
     ):
         self.text_calls += 1
-        return None
+        if not self.text_responses:
+            return None
+        return self.text_responses.pop(0)
 
 
 def _brief(latest: str, recent_thread: list[str] | None = None) -> ReplyBrief:
@@ -48,10 +50,10 @@ def _brief(latest: str, recent_thread: list[str] | None = None) -> ReplyBrief:
 
 
 def test_open_ended_message_uses_llm_path():
-    adapter = FakeAdapter([{"messages": ["yo what's up, i'm here. what's the move tonight?"]}], enabled=True)
+    adapter = FakeAdapter(["yo what's up, i'm here. what's the move tonight?"], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_brief("what up tho"))
-    assert adapter.calls >= 1
+    assert adapter.text_calls >= 1
     assert reply.used_fallback is False
     assert reply.messages
 
@@ -60,7 +62,7 @@ def test_fallback_only_on_forced_model_failure():
     adapter = FakeAdapter([None], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_brief("hey"))
-    assert adapter.calls >= 1
+    assert adapter.text_calls >= 1
     assert reply.used_fallback is True
     assert reply.messages
 
@@ -68,7 +70,7 @@ def test_fallback_only_on_forced_model_failure():
 def test_repetition_guard_triggers_regeneration():
     adapter = FakeAdapter(
         [
-            {"messages": ["got you. what's the move?"]},
+            "got you. what's the move?",
         ],
         enabled=True,
     )
@@ -80,23 +82,11 @@ def test_repetition_guard_triggers_regeneration():
     assert "what's the real next move" in " ".join(reply.messages).lower()
 
 
-def test_plain_text_recovery_path_before_fallback():
-    class JsonFailTextPassAdapter(FakeAdapter):
-        def text_completion(  # noqa: ANN001
-            self,
-            *,
-            system: str,
-            user: str,
-            model: str | None = None,
-            options: dict | None = None,
-        ):
-            self.text_calls += 1
-            return "yo i got you\n\nstart with a 20 min pass, then ping me."
-
-    adapter = JsonFailTextPassAdapter([None], enabled=True)
+def test_composer_keeps_single_llm_attempt_path():
+    adapter = FakeAdapter(["yo i got you\n\nstart with a 20 min pass, then ping me."], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_brief("i'm cooked"))
-    assert adapter.calls >= 1
     assert adapter.text_calls >= 1
+    assert adapter.calls == 0
     assert reply.used_fallback is False
     assert len(reply.messages) >= 1

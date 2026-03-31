@@ -1,6 +1,7 @@
 from sqlalchemy import select
 
-from app.db.models import ConversationMessage, MessageDirection, User
+import pytest
+from app.db.models import ConversationMessage, JobStatus, MessageDirection, ProcessingJob, User
 from app.domain.conversation_manager import ConversationManager
 from app.schemas.reply import ComposedReply
 from app.schemas.transport import InboundSmsPayload
@@ -58,3 +59,31 @@ def test_open_ended_message_uses_composer_path(db_session):
 
     assert composer.called is True
     assert result.outgoing_messages
+
+
+def test_processing_job_marked_failed_when_pipeline_raises(db_session):
+    class BoomExtractor:
+        def extract(self, text: str, timezone: str):  # noqa: ANN001
+            raise RuntimeError("intent extraction exploded")
+
+    user = db_session.execute(select(User)).scalars().first()
+    manager = ConversationManager(intent_extractor=BoomExtractor())
+    payload = InboundSmsPayload(
+        From=user.phone_number,
+        To="+15550002222",
+        Body="hey",
+        MessageSid="SM_FAIL_STATUS_TEST",
+        NumMedia=0,
+        media=[],
+    )
+
+    with pytest.raises(RuntimeError):
+        manager.process_inbound(db_session, payload)
+
+    latest_job = (
+        db_session.execute(select(ProcessingJob).order_by(ProcessingJob.created_at.desc()).limit(1))
+        .scalars()
+        .first()
+    )
+    assert latest_job is not None
+    assert latest_job.status == JobStatus.failed

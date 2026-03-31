@@ -52,49 +52,43 @@ class ConversationComposer:
 
     def _generate_messages(self, *, brief: ReplyBrief, avoid_phrases: list[str]) -> list[str] | None:
         payload = self._model_payload(brief=brief, avoid_phrases=avoid_phrases)
-        json_result = self.adapter.json_completion(
+        # Keep compose to one LLM call for predictable latency under local CPU inference.
+        text = self.adapter.text_completion(
             system=self._system_prompt(),
             user=payload,
-            options={"temperature": 0.65, "num_predict": 260},
-        )
-        messages = self._extract_messages(json_result)
-        if messages:
-            return messages
-
-        # Recovery path when strict JSON format is flaky.
-        text = self.adapter.text_completion(
-            system=self._system_prompt_text(),
-            user=payload,
-            options={"temperature": 0.65, "num_predict": 260},
+            options={"temperature": 0.65, "num_predict": 120},
+            request_timeout_seconds=14,
         )
         return self._extract_messages_from_text(text)
 
     @staticmethod
     def _system_prompt() -> str:
         return (
-            "You are composing outbound SMS replies for a personal accountability agent. "
-            "Write like a real human texting a friend: casual, modern, socially fluent, concise, and context-aware. "
-            "Be naturally warm without fake hype. No corporate tone. No therapist tone. No cringe. "
-            "No em dashes. No markdown. Avoid repeating recent wording. "
-            "Use short text bubbles that feel native to iMessage. "
-            "Respond to what the user actually said, not generic productivity slogans. "
-            "Return strict JSON: {\"messages\": [\"...\", \"...\"]}. "
-            "1 to 3 messages max, each message should stand alone and be natural."
-        )
-
-    @staticmethod
-    def _system_prompt_text() -> str:
-        return (
-            "Compose the outbound SMS replies as plain text. "
-            "You may return one or more message bubbles separated by blank lines. "
-            "No markdown, no labels, no numbering. "
-            "Same voice constraints: casual, modern, concise, human, non-robotic."
+            "You write outbound SMS replies for a personal execution manager. "
+            "Sound like a real person texting: casual, modern, sharp, socially fluent, concise. "
+            "Never robotic, corporate, therapist-y, or generic productivity-bot language. "
+            "No em dashes, no markdown, no labels, no numbering. "
+            "Answer what the user actually said, in context, and keep momentum. "
+            "Use 1-3 message bubbles max, each short. "
+            "Output plain text only. If multiple bubbles, separate them with one blank line."
         )
 
     def _model_payload(self, *, brief: ReplyBrief, avoid_phrases: list[str]) -> str:
         compact = {
             "generated_at": datetime.now(tz=timezone.utc).isoformat(),
-            "reply_brief": brief.model_dump(mode="json"),
+            "latest_user_message": brief.latest_user_message,
+            "response_goal": brief.response_goal,
+            "operational_reason": brief.operational_reason,
+            "urgency_level": brief.urgency_level,
+            "style_mode": brief.style_mode,
+            "key_facts": brief.key_facts_to_include[:4],
+            "question_if_needed": brief.question_if_needed,
+            "suggested_next_step": brief.suggested_next_step,
+            "active_tasks": brief.active_task_context[:4],
+            "deadlines": brief.deadline_context[:4],
+            "state_flags": brief.current_state_flags[:3],
+            "memory_notes": brief.memory_notes[:3],
+            "recent_thread": brief.recent_thread[-6:],
             "constraints": {
                 "max_chunks": brief.max_chunks,
                 "max_chunk_length": brief.max_chunk_length,
@@ -104,19 +98,6 @@ class ConversationComposer:
             },
         }
         return json.dumps(compact, ensure_ascii=True)
-
-    @staticmethod
-    def _extract_messages(result: dict | None) -> list[str] | None:
-        if not isinstance(result, dict):
-            return None
-        messages = result.get("messages")
-        if not isinstance(messages, list):
-            single = result.get("message")
-            if isinstance(single, str) and single.strip():
-                return [single.strip()]
-            return None
-        cleaned = [str(m).strip() for m in messages if str(m).strip()]
-        return cleaned or None
 
     @staticmethod
     def _extract_messages_from_text(text: str | None) -> list[str] | None:

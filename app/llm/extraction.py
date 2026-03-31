@@ -30,7 +30,8 @@ class IntentExtractor:
                 f"message={text}\n"
                 "task should be object with: title, description, project, deadline_text, priority, confidence, next_step."
             ),
-            options={"temperature": 0.1, "num_predict": 220},
+            options={"temperature": 0.1, "num_predict": 120},
+            request_timeout_seconds=8,
         )
         if not payload:
             return None
@@ -159,6 +160,7 @@ class ImageAssignmentExtractor:
             ),
             user_prompt=f"timezone={timezone}. infer due dates if present. be conservative on confidence.",
             image_url=image_url,
+            request_timeout_seconds=25,
         )
         if not payload:
             return ImageExtractionResult(confidence=0.0)

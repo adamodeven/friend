@@ -39,6 +39,7 @@ class OllamaAdapter:
         user: str,
         model: str | None = None,
         options: dict[str, Any] | None = None,
+        request_timeout_seconds: float | None = None,
     ) -> dict[str, Any] | None:
         if not self._enabled:
             return None
@@ -53,7 +54,7 @@ class OllamaAdapter:
         }
         if options:
             payload_chat["options"] = options
-        content = self._chat_content(payload_chat)
+        content = self._chat_content(payload_chat, request_timeout_seconds=request_timeout_seconds)
         if content == "__chat_404__":
             payload_generate = {
                 "model": model or self._text_model,
@@ -63,7 +64,7 @@ class OllamaAdapter:
             }
             if options:
                 payload_generate["options"] = options
-            content = self._generate_content(payload_generate)
+            content = self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
         if not content:
             return None
         parsed = self._parse_json(content)
@@ -78,6 +79,7 @@ class OllamaAdapter:
         user: str,
         model: str | None = None,
         options: dict[str, Any] | None = None,
+        request_timeout_seconds: float | None = None,
     ) -> str | None:
         if not self._enabled:
             return None
@@ -91,7 +93,7 @@ class OllamaAdapter:
         }
         if options:
             payload_chat["options"] = options
-        content = self._chat_content(payload_chat)
+        content = self._chat_content(payload_chat, request_timeout_seconds=request_timeout_seconds)
         if content and content != "__chat_404__":
             return content
         if content != "__chat_404__":
@@ -103,7 +105,7 @@ class OllamaAdapter:
         }
         if options:
             payload_generate["options"] = options
-        return self._generate_content(payload_generate)
+        return self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
 
     def vision_json(
         self,
@@ -111,10 +113,11 @@ class OllamaAdapter:
         system: str,
         user_prompt: str,
         image_url: str,
+        request_timeout_seconds: float | None = None,
     ) -> dict[str, Any] | None:
         if not self._enabled:
             return None
-        image_b64 = self._download_image_as_base64(image_url)
+        image_b64 = self._download_image_as_base64(image_url, request_timeout_seconds=request_timeout_seconds)
         if not image_b64:
             return None
         payload = {
@@ -126,7 +129,7 @@ class OllamaAdapter:
                 {"role": "user", "content": user_prompt, "images": [image_b64]},
             ],
         }
-        content = self._chat_content(payload)
+        content = self._chat_content(payload, request_timeout_seconds=request_timeout_seconds)
         if content == "__chat_404__":
             payload_generate = {
                 "model": self._vision_model,
@@ -135,7 +138,7 @@ class OllamaAdapter:
                 "prompt": f"{system}\n\n{user_prompt}",
                 "images": [image_b64],
             }
-            content = self._generate_content(payload_generate)
+            content = self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
         if not content:
             return None
         parsed = self._parse_json(content)
@@ -143,9 +146,9 @@ class OllamaAdapter:
             return parsed
         return None
 
-    def _chat_content(self, payload: dict[str, Any]) -> str | None:
+    def _chat_content(self, payload: dict[str, Any], *, request_timeout_seconds: float | None = None) -> str | None:
         try:
-            with httpx.Client(timeout=self._timeout) as client:
+            with httpx.Client(timeout=self._timeout_for(request_timeout_seconds)) as client:
                 response = client.post(f"{self._base_url}/api/chat", json=payload)
                 if response.status_code == 404:
                     return "__chat_404__"
@@ -156,9 +159,9 @@ class OllamaAdapter:
             logger.exception("ollama chat failed: %s", exc)
             return None
 
-    def _generate_content(self, payload: dict[str, Any]) -> str | None:
+    def _generate_content(self, payload: dict[str, Any], *, request_timeout_seconds: float | None = None) -> str | None:
         try:
-            with httpx.Client(timeout=self._timeout) as client:
+            with httpx.Client(timeout=self._timeout_for(request_timeout_seconds)) as client:
                 response = client.post(f"{self._base_url}/api/generate", json=payload)
                 response.raise_for_status()
                 data = response.json()
@@ -167,9 +170,14 @@ class OllamaAdapter:
             logger.exception("ollama generate failed: %s", exc)
             return None
 
-    def _download_image_as_base64(self, image_url: str) -> str | None:
+    def _download_image_as_base64(
+        self,
+        image_url: str,
+        *,
+        request_timeout_seconds: float | None = None,
+    ) -> str | None:
         try:
-            with httpx.Client(timeout=self._timeout) as client:
+            with httpx.Client(timeout=self._timeout_for(request_timeout_seconds)) as client:
                 resp = client.get(image_url, follow_redirects=True)
                 resp.raise_for_status()
                 content = resp.content
@@ -177,6 +185,17 @@ class OllamaAdapter:
         except Exception as exc:  # pragma: no cover
             logger.exception("failed downloading image for vision parse: %s", exc)
             return None
+
+    def _timeout_for(self, request_timeout_seconds: float | None) -> httpx.Timeout:
+        if request_timeout_seconds is None:
+            return self._timeout
+        total = max(1.0, float(request_timeout_seconds))
+        return httpx.Timeout(
+            connect=min(3.0, total),
+            read=total,
+            write=min(8.0, total),
+            pool=3.0,
+        )
 
     @staticmethod
     def _parse_json(text: str) -> Any:

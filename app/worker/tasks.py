@@ -22,7 +22,7 @@ from app.transport.twilio_adapter import TwilioTransport
 logger = logging.getLogger(__name__)
 
 
-@shared_task(name="app.worker.tasks.process_inbound_sms_task", soft_time_limit=70, time_limit=80)
+@shared_task(name="app.worker.tasks.process_inbound_sms_task", soft_time_limit=45)
 def process_inbound_sms_task(payload_data: dict[str, Any]) -> dict[str, Any]:
     session = SessionLocal()
     transport = TwilioTransport()

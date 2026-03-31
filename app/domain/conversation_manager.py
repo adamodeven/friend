@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -15,6 +17,8 @@ from app.ingestion.attachments import AttachmentIngestionService
 from app.llm.conversation_composer import ConversationComposer
 from app.llm.extraction import IntentExtractor
 from app.schemas.transport import InboundSmsPayload
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,6 +45,7 @@ class ConversationManager:
         self.attachment_service = attachment_service or AttachmentIngestionService()
 
     def process_inbound(self, session: Session, payload: InboundSmsPayload) -> ProcessResult:
+        started = time.monotonic()
         if inbound_message_exists(session, payload.message_sid):
             return ProcessResult(user_id="", outgoing_messages=[], skipped_duplicate=True)
 
@@ -78,14 +83,17 @@ class ConversationManager:
             # Persist inbound capture immediately so it is visible in admin logs
             # even if downstream LLM/state steps time out or fail.
             session.commit()
+            logger.info("inbound persisted sid=%s elapsed=%.2fs", payload.message_sid, time.monotonic() - started)
 
             intent = self.intent_extractor.extract(payload.body, timezone=user.timezone)
+            logger.info("intent extracted sid=%s elapsed=%.2fs", payload.message_sid, time.monotonic() - started)
             state_outcome = self.state_engine.apply_intent(
                 session,
                 user=user,
                 intent=intent,
                 raw_text=payload.body,
             )
+            logger.info("state applied sid=%s elapsed=%.2fs", payload.message_sid, time.monotonic() - started)
 
             if attachments_created:
                 for att in attachments_created:
@@ -109,6 +117,7 @@ class ConversationManager:
                 outcome=state_outcome,
             )
             reply = self.conversation_composer.compose(brief)
+            logger.info("reply composed sid=%s elapsed=%.2fs", payload.message_sid, time.monotonic() - started)
 
             outgoing = []
             for chunk in reply.messages:
@@ -134,9 +143,11 @@ class ConversationManager:
                 "regenerated_for_repetition": reply.regenerated_for_repetition,
             }
             session.flush()
+            logger.info("inbound complete sid=%s outgoing=%s elapsed=%.2fs", payload.message_sid, len(outgoing), time.monotonic() - started)
             return ProcessResult(user_id=str(user.id), outgoing_messages=outgoing)
         except Exception as exc:
             job.status = JobStatus.failed
             job.error = str(exc)
-            session.flush()
+            session.commit()
+            logger.exception("inbound failed sid=%s elapsed=%.2fs", payload.message_sid, time.monotonic() - started)
             raise

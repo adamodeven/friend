@@ -30,6 +30,7 @@ class IntentExtractor:
                 f"message={text}\n"
                 "task should be object with: title, description, project, deadline_text, priority, confidence, next_step."
             ),
+            options={"temperature": 0.1, "num_predict": 220},
         )
         if not payload:
             return None

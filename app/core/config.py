@@ -22,9 +22,9 @@ class Settings(BaseSettings):
 
     llm_provider: str = "ollama"
     ollama_base_url: str = "http://localhost:11434"
-    ollama_text_model: str = "llama3.1:8b"
+    ollama_text_model: str = "llama3.2:3b"
     ollama_vision_model: str = "llava:13b"
-    ollama_timeout_seconds: int = 300
+    ollama_timeout_seconds: int = 45
 
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

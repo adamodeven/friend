@@ -46,25 +46,27 @@ class ConversationComposer:
 
         combined = " ".join(messages)
         if self.repetition_guard.is_too_similar(combined, recent_assistant):
-            avoid = self.repetition_guard.avoid_phrases(recent_assistant)
-            retry_messages = self._generate_messages(brief=brief, avoid_phrases=avoid)
-            if retry_messages:
-                retry_combined = " ".join(retry_messages)
-                if not self.repetition_guard.is_too_similar(retry_combined, recent_assistant):
-                    return retry_messages, True
-                retry_messages[-1] = self._force_distinct_tail(retry_messages[-1], brief)
-                return retry_messages, True
+            messages[-1] = self._force_distinct_tail(messages[-1], brief)
+            return messages, True
         return messages, False
 
     def _generate_messages(self, *, brief: ReplyBrief, avoid_phrases: list[str]) -> list[str] | None:
         payload = self._model_payload(brief=brief, avoid_phrases=avoid_phrases)
-        json_result = self.adapter.json_completion(system=self._system_prompt(), user=payload)
+        json_result = self.adapter.json_completion(
+            system=self._system_prompt(),
+            user=payload,
+            options={"temperature": 0.65, "num_predict": 260},
+        )
         messages = self._extract_messages(json_result)
         if messages:
             return messages
 
         # Recovery path when strict JSON format is flaky.
-        text = self.adapter.text_completion(system=self._system_prompt_text(), user=payload)
+        text = self.adapter.text_completion(
+            system=self._system_prompt_text(),
+            user=payload,
+            options={"temperature": 0.65, "num_predict": 260},
+        )
         return self._extract_messages_from_text(text)
 
     @staticmethod

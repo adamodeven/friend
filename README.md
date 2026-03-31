@@ -132,11 +132,12 @@ https://<your-domain>/webhooks/twilio
 - For Docker stack services, `OLLAMA_BASE_URL=http://ollama:11434`
 - For host-local API process, use `OLLAMA_BASE_URL=http://localhost:11434`
 - Default models in this repo:
-  - `OLLAMA_TEXT_MODEL=llama3.1:8b`
+  - `OLLAMA_TEXT_MODEL=llama3.2:3b`
   - `OLLAMA_VISION_MODEL=llava:13b`
 - `OLLAMA_PULL_VISION_ON_STARTUP=false` by default so chat starts faster.
-- `OLLAMA_TIMEOUT_SECONDS=300` default favors reliability on CPU-only hosts.
+- `OLLAMA_TIMEOUT_SECONDS=45` default favors fail-fast behavior on CPU-only hosts.
 - Model pull is automated by the `ollama-init` compose service.
+- For low-RAM/CPU hosts, keep `OLLAMA_TEXT_MODEL=llama3.2:3b` for responsive SMS latency.
 
 ## 7) Simulate Inbound Messages
 

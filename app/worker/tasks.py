@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from celery import shared_task
 from sqlalchemy import select
 
@@ -21,7 +22,7 @@ from app.transport.twilio_adapter import TwilioTransport
 logger = logging.getLogger(__name__)
 
 
-@shared_task(name="app.worker.tasks.process_inbound_sms_task")
+@shared_task(name="app.worker.tasks.process_inbound_sms_task", soft_time_limit=70, time_limit=80)
 def process_inbound_sms_task(payload_data: dict[str, Any]) -> dict[str, Any]:
     session = SessionLocal()
     transport = TwilioTransport()
@@ -44,6 +45,40 @@ def process_inbound_sms_task(payload_data: dict[str, Any]) -> dict[str, Any]:
             "message_sid": payload.message_sid,
             "outgoing_count": sent,
         }
+    except SoftTimeLimitExceeded as exc:  # pragma: no cover
+        session.rollback()
+        logger.exception("inbound sms task timed out for sid=%s: %s", payload.message_sid, exc)
+        fallback_body = "quick heads up: response took too long on my side. i still logged this, resend and i got you."
+        try:
+            user = get_user_by_phone(session, payload.from_number) or get_or_create_primary_user(session)
+            if not inbound_message_exists(session, payload.message_sid):
+                create_message(
+                    session,
+                    user_id=user.id,
+                    direction=MessageDirection.inbound,
+                    body=payload.body,
+                    external_id=payload.message_sid,
+                    metadata_json={
+                        "from": payload.from_number,
+                        "to": payload.to_number,
+                        "num_media": payload.num_media,
+                        "processing_timed_out": True,
+                    },
+                )
+            sid = transport.send_sms(to_number=payload.from_number, body=fallback_body)
+            create_message(
+                session,
+                user_id=user.id,
+                direction=MessageDirection.outbound,
+                body=fallback_body,
+                external_id=sid,
+                metadata_json={"source": "fallback_after_timeout"},
+            )
+            session.commit()
+        except Exception as send_exc:
+            session.rollback()
+            logger.exception("timeout fallback sms send failed for sid=%s: %s", payload.message_sid, send_exc)
+        return {"skipped_duplicate": False, "message_sid": payload.message_sid, "error": "timeout"}
     except Exception as exc:  # pragma: no cover
         session.rollback()
         logger.exception("inbound sms task failed for sid=%s: %s", payload.message_sid, exc)

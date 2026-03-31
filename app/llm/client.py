@@ -19,14 +19,27 @@ class OllamaAdapter:
         self._text_model = settings.ollama_text_model
         self._vision_model = settings.ollama_vision_model
         self._base_url = settings.ollama_base_url.rstrip("/")
-        self._timeout = float(settings.ollama_timeout_seconds)
+        self._timeout_seconds = float(settings.ollama_timeout_seconds)
+        self._timeout = httpx.Timeout(
+            connect=min(5.0, self._timeout_seconds),
+            read=self._timeout_seconds,
+            write=20.0,
+            pool=5.0,
+        )
         self._enabled = settings.llm_provider.lower() == "ollama"
 
     @property
     def enabled(self) -> bool:
         return self._enabled
 
-    def json_completion(self, *, system: str, user: str, model: str | None = None) -> dict[str, Any] | None:
+    def json_completion(
+        self,
+        *,
+        system: str,
+        user: str,
+        model: str | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         if not self._enabled:
             return None
         payload_chat = {
@@ -38,14 +51,18 @@ class OllamaAdapter:
                 {"role": "user", "content": user},
             ],
         }
+        if options:
+            payload_chat["options"] = options
         content = self._chat_content(payload_chat)
-        if content is None:
+        if content == "__chat_404__":
             payload_generate = {
                 "model": model or self._text_model,
                 "stream": False,
                 "format": "json",
                 "prompt": f"{system}\n\n{user}",
             }
+            if options:
+                payload_generate["options"] = options
             content = self._generate_content(payload_generate)
         if not content:
             return None
@@ -54,7 +71,14 @@ class OllamaAdapter:
             return parsed
         return None
 
-    def text_completion(self, *, system: str, user: str, model: str | None = None) -> str | None:
+    def text_completion(
+        self,
+        *,
+        system: str,
+        user: str,
+        model: str | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> str | None:
         if not self._enabled:
             return None
         payload_chat = {
@@ -65,14 +89,20 @@ class OllamaAdapter:
                 {"role": "user", "content": user},
             ],
         }
+        if options:
+            payload_chat["options"] = options
         content = self._chat_content(payload_chat)
-        if content is not None:
+        if content and content != "__chat_404__":
             return content
+        if content != "__chat_404__":
+            return None
         payload_generate = {
             "model": model or self._text_model,
             "stream": False,
             "prompt": f"{system}\n\n{user}",
         }
+        if options:
+            payload_generate["options"] = options
         return self._generate_content(payload_generate)
 
     def vision_json(
@@ -97,7 +127,7 @@ class OllamaAdapter:
             ],
         }
         content = self._chat_content(payload)
-        if content is None:
+        if content == "__chat_404__":
             payload_generate = {
                 "model": self._vision_model,
                 "stream": False,
@@ -114,36 +144,28 @@ class OllamaAdapter:
         return None
 
     def _chat_content(self, payload: dict[str, Any]) -> str | None:
-        last_exc: Exception | None = None
-        for _ in range(2):
-            try:
-                with httpx.Client(timeout=self._timeout) as client:
-                    response = client.post(f"{self._base_url}/api/chat", json=payload)
-                    if response.status_code == 404:
-                        return None
-                    response.raise_for_status()
-                    data = response.json()
-                return (data.get("message") or {}).get("content")
-            except Exception as exc:  # pragma: no cover
-                last_exc = exc
-        if last_exc:  # pragma: no cover
-            logger.exception("ollama chat failed: %s", last_exc)
-        return None
+        try:
+            with httpx.Client(timeout=self._timeout) as client:
+                response = client.post(f"{self._base_url}/api/chat", json=payload)
+                if response.status_code == 404:
+                    return "__chat_404__"
+                response.raise_for_status()
+                data = response.json()
+            return (data.get("message") or {}).get("content")
+        except Exception as exc:  # pragma: no cover
+            logger.exception("ollama chat failed: %s", exc)
+            return None
 
     def _generate_content(self, payload: dict[str, Any]) -> str | None:
-        last_exc: Exception | None = None
-        for _ in range(2):
-            try:
-                with httpx.Client(timeout=self._timeout) as client:
-                    response = client.post(f"{self._base_url}/api/generate", json=payload)
-                    response.raise_for_status()
-                    data = response.json()
-                return data.get("response")
-            except Exception as exc:  # pragma: no cover
-                last_exc = exc
-        if last_exc:  # pragma: no cover
-            logger.exception("ollama generate failed: %s", last_exc)
-        return None
+        try:
+            with httpx.Client(timeout=self._timeout) as client:
+                response = client.post(f"{self._base_url}/api/generate", json=payload)
+                response.raise_for_status()
+                data = response.json()
+            return data.get("response")
+        except Exception as exc:  # pragma: no cover
+            logger.exception("ollama generate failed: %s", exc)
+            return None
 
     def _download_image_as_base64(self, image_url: str) -> str | None:
         try:

@@ -13,13 +13,27 @@ class FakeAdapter:
         self.calls = 0
         self.text_calls = 0
 
-    def json_completion(self, *, system: str, user: str, model: str | None = None):  # noqa: ANN001
+    def json_completion(  # noqa: ANN001
+        self,
+        *,
+        system: str,
+        user: str,
+        model: str | None = None,
+        options: dict | None = None,
+    ):
         self.calls += 1
         if not self.responses:
             return None
         return self.responses.pop(0)
 
-    def text_completion(self, *, system: str, user: str, model: str | None = None):  # noqa: ANN001
+    def text_completion(  # noqa: ANN001
+        self,
+        *,
+        system: str,
+        user: str,
+        model: str | None = None,
+        options: dict | None = None,
+    ):
         self.text_calls += 1
         return None
 
@@ -55,7 +69,6 @@ def test_repetition_guard_triggers_regeneration():
     adapter = FakeAdapter(
         [
             {"messages": ["got you. what's the move?"]},
-            {"messages": ["say less. what's the main thing tonight?"]},
         ],
         enabled=True,
     )
@@ -64,12 +77,19 @@ def test_repetition_guard_triggers_regeneration():
     reply = composer.compose(brief)
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
-    assert "main thing tonight" in " ".join(reply.messages).lower()
+    assert "what's the real next move" in " ".join(reply.messages).lower()
 
 
 def test_plain_text_recovery_path_before_fallback():
     class JsonFailTextPassAdapter(FakeAdapter):
-        def text_completion(self, *, system: str, user: str, model: str | None = None):  # noqa: ANN001
+        def text_completion(  # noqa: ANN001
+            self,
+            *,
+            system: str,
+            user: str,
+            model: str | None = None,
+            options: dict | None = None,
+        ):
             self.text_calls += 1
             return "yo i got you\n\nstart with a 20 min pass, then ping me."
 

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.session import get_session
 from app.domain.conversation_manager import ConversationManager
 from app.schemas.transport import InboundSmsPayload
@@ -21,7 +22,8 @@ async def twilio_webhook(
     form = await request.form()
     data = {k: str(v) for k, v in form.multi_items()}
     transport = TwilioTransport()
-    if transport.enabled:
+    settings = get_settings()
+    if transport.enabled and settings.twilio_validate_signature:
         is_valid = transport.validate_webhook(str(request.url), data, x_twilio_signature)
         if not is_valid:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid twilio signature")
@@ -37,4 +39,3 @@ async def twilio_webhook(
 
     session.commit()
     return "ok"
-

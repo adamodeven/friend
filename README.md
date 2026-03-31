@@ -123,6 +123,7 @@ https://<your-domain>/webhooks/twilio
 - `TWILIO_AUTH_TOKEN`
 - `TWILIO_FROM_NUMBER`
 - `TWILIO_TO_NUMBER` (your personal number for one-user mode)
+- `TWILIO_VALIDATE_SIGNATURE=false` (recommended behind reverse proxy for MVP)
 
 ## 6) Ollama Setup
 
@@ -234,7 +235,14 @@ Current suite validates:
 - reminder scheduling + dedup spacing behavior
 - inbound webhook idempotency behavior
 
-## 13) Known MVP Limitations / Next Upgrades
+## 13) Quick Troubleshooting
+
+- Incoming shows in Twilio but no outbound:
+  - confirm `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` are set in `.env`
+  - for reverse-proxy deployments, keep `TWILIO_VALIDATE_SIGNATURE=false`
+  - check API logs: `docker logs -f friend-api`
+
+## 14) Known MVP Limitations / Next Upgrades
 
 - Single-user mode only (by design for now)
 - Attachment OCR uses model vision parsing directly; no dedicated OCR fallback yet

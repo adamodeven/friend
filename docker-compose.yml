@@ -9,7 +9,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8000:8000"
+      - "${APP_PORT:-8000}:${APP_PORT:-8000}"
     depends_on:
       postgres:
         condition: service_started
@@ -21,7 +21,7 @@ services:
       - friend_data:/data
     command: >
       sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+             uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT:-8000}"
 
   worker:
     build:

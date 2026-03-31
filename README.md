@@ -102,6 +102,9 @@ For local Docker deploy:
 docker compose up --build
 ```
 
+Note:
+- API host binding uses `APP_PORT` from `.env` (default `8000`).
+
 If you change model names later and want to pull again:
 ```bash
 docker compose run --rm ollama-init
@@ -150,6 +153,8 @@ curl -X POST http://localhost:8000/api/messages/simulate \
     "message_sid":"SM_LOCAL_001"
   }'
 ```
+
+If you changed `APP_PORT`, replace `8000` in the URL above with your configured port.
 
 ## 8) Admin/Debug Surface
 

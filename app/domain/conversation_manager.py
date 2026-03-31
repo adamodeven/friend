@@ -7,11 +7,12 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.db.models import JobStatus, MessageDirection, ProcessingJob
-from app.db.repositories.message_repo import create_message, inbound_message_exists, list_recent_messages
+from app.db.repositories.message_repo import create_message, inbound_message_exists
 from app.db.repositories.user_repo import get_user_by_phone, get_or_create_primary_user
+from app.domain.reply_brief_builder import ReplyBriefBuilder
 from app.domain.state_engine import StateEngine
 from app.ingestion.attachments import AttachmentIngestionService
-from app.llm.composer import ReplyComposer
+from app.llm.conversation_composer import ConversationComposer
 from app.llm.extraction import IntentExtractor
 from app.schemas.transport import InboundSmsPayload
 
@@ -24,11 +25,20 @@ class ProcessResult:
 
 
 class ConversationManager:
-    def __init__(self) -> None:
-        self.intent_extractor = IntentExtractor()
-        self.state_engine = StateEngine()
-        self.reply_composer = ReplyComposer()
-        self.attachment_service = AttachmentIngestionService()
+    def __init__(
+        self,
+        *,
+        intent_extractor: IntentExtractor | None = None,
+        state_engine: StateEngine | None = None,
+        brief_builder: ReplyBriefBuilder | None = None,
+        composer: ConversationComposer | None = None,
+        attachment_service: AttachmentIngestionService | None = None,
+    ) -> None:
+        self.intent_extractor = intent_extractor or IntentExtractor()
+        self.state_engine = state_engine or StateEngine()
+        self.brief_builder = brief_builder or ReplyBriefBuilder()
+        self.conversation_composer = composer or ConversationComposer()
+        self.attachment_service = attachment_service or AttachmentIngestionService()
 
     def process_inbound(self, session: Session, payload: InboundSmsPayload) -> ProcessResult:
         if inbound_message_exists(session, payload.message_sid):
@@ -66,7 +76,7 @@ class ConversationManager:
                 attachments_created.append(att)
 
             intent = self.intent_extractor.extract(payload.body, timezone=user.timezone)
-            action_summary = self.state_engine.apply_intent(
+            state_outcome = self.state_engine.apply_intent(
                 session,
                 user=user,
                 intent=intent,
@@ -83,16 +93,18 @@ class ConversationManager:
                     )
                     if artifact and task:
                         due = task.deadline_at.astimezone(ZoneInfo(user.timezone)).strftime("%a %-m/%-d %-I:%M%p").lower() if task.deadline_at else "no deadline seen"
-                        action_summary += f" | image parsed: {task.title} ({due})"
+                        state_outcome.response_goal = "ingestion_confirmation"
+                        state_outcome.key_facts_to_include.append(f"image ingestion captured task: {task.title}")
+                        state_outcome.key_facts_to_include.append(f"image-derived due context: {due}")
+                        state_outcome.mention_deadline = bool(task.deadline_at)
 
-            state_summary = self._recent_state_summary(session, user.id)
-            reply = self.reply_composer.compose(
-                style=user.profile.style.value if user.profile else "casual_cool",
-                intent=intent,
-                state_summary=state_summary,
-                action_summary=action_summary,
-                timezone=user.timezone,
+            brief = self.brief_builder.build(
+                session,
+                user=user,
+                latest_user_message=payload.body,
+                outcome=state_outcome,
             )
+            reply = self.conversation_composer.compose(brief)
 
             outgoing = []
             for chunk in reply.messages:
@@ -102,12 +114,21 @@ class ConversationManager:
                     direction=MessageDirection.outbound,
                     body=chunk,
                     external_id=None,
-                    metadata_json={"in_reply_to": payload.message_sid},
+                    metadata_json={
+                        "in_reply_to": payload.message_sid,
+                        "response_goal": brief.response_goal,
+                        "used_fallback": reply.used_fallback,
+                    },
                 )
                 outgoing.append(chunk)
 
             job.status = JobStatus.done
-            job.output_payload = {"outgoing_messages": outgoing, "action_summary": action_summary}
+            job.output_payload = {
+                "outgoing_messages": outgoing,
+                "response_goal": brief.response_goal,
+                "used_fallback": reply.used_fallback,
+                "regenerated_for_repetition": reply.regenerated_for_repetition,
+            }
             session.flush()
             return ProcessResult(user_id=str(user.id), outgoing_messages=outgoing)
         except Exception as exc:
@@ -115,12 +136,3 @@ class ConversationManager:
             job.error = str(exc)
             session.flush()
             raise
-
-    @staticmethod
-    def _recent_state_summary(session: Session, user_id) -> str:
-        msgs = list_recent_messages(session, user_id, limit=12)
-        lines = []
-        for msg in msgs[-6:]:
-            prefix = "u" if msg.direction == MessageDirection.inbound else "a"
-            lines.append(f"{prefix}:{msg.body[:100]}")
-        return " | ".join(lines)

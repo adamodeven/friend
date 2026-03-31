@@ -186,8 +186,23 @@ friend-admin run-reminders
 ### LLM role (non-authoritative)
 - Intent classification
 - Task/deadline extraction
-- Conversation phrasing/style
+- Conversation phrasing/style (LLM-first via reply brief composer)
 - Screenshot understanding for assignment ingestion
+
+### Response architecture (refactored)
+- Layer 1 deterministic state/action engine:
+  - updates tasks, deadlines, reminders, context, notes
+  - outputs structured `StateOutcome` goals/facts (not end-user wording)
+- Layer 2 reply-brief builder:
+  - packages latest message, thread window, active tasks, deadlines, profile notes, context flags
+  - emits `ReplyBrief` for generation
+- Layer 3 LLM conversation composer:
+  - generates fresh human texting output from the reply brief
+  - semantic chunking for 1-3 natural bubbles
+  - repetition guard retries once if wording is too similar to recent assistant output
+- Layer 4 failure fallback:
+  - minimal safety-only outputs for model failure/timeouts
+  - separated from normal flow
 
 ### Reliability controls
 - Inbound dedup via Twilio `MessageSid` + unique constraint

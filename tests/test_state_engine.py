@@ -15,12 +15,12 @@ def test_add_task_creates_task_and_deadline_event(db_session):
         confidence=0.9,
         task=ExtractedTask(title="Finish CAD", deadline_text="tomorrow night"),
     )
-    summary = engine.apply_intent(db_session, user=user, intent=intent, raw_text="finish cad tomorrow night")
+    outcome = engine.apply_intent(db_session, user=user, intent=intent, raw_text="finish cad tomorrow night")
     db_session.commit()
 
     task = db_session.execute(select(Task).where(Task.title == "Finish CAD")).scalars().first()
     assert task is not None
-    assert "added" in summary
+    assert outcome.response_goal == "acknowledge_new_task"
 
 
 def test_context_signal_creates_schedule_block(db_session):
@@ -39,10 +39,11 @@ def test_status_query_meta_gets_direct_explanation(db_session):
     user = db_session.execute(select(User)).scalars().first()
     engine = StateEngine()
     intent = IntentResult(intent="status_query", confidence=0.9)
-    summary = engine.apply_intent(
+    outcome = engine.apply_intent(
         db_session,
         user=user,
         intent=intent,
         raw_text="are these canned responses or live ai generated?",
     )
-    assert "hybrid" in summary.lower()
+    assert outcome.response_goal == "answer_question"
+    assert any("deterministic" in fact for fact in outcome.key_facts_to_include)

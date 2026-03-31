@@ -71,21 +71,7 @@ class IntentExtractor:
             intent = "context_signal"
             context_signal = lowered
             confidence = 0.82
-        elif any(
-            token in lowered
-            for token in [
-                "what do you do",
-                "who are you",
-                "what can you do",
-                "how do you work",
-                "help me plan",
-                "canned responses",
-                "live ai",
-                "ai generated",
-                "are you automated",
-                "are you a bot",
-            ]
-        ):
+        elif self._is_meta_or_capability_query(lowered):
             intent = "status_query"
             confidence = 0.9
             return IntentResult(intent=intent, confidence=confidence, summary="user asked assistant capabilities")
@@ -147,6 +133,17 @@ class IntentExtractor:
             if match:
                 return match.group(0)
         return None
+
+    @staticmethod
+    def _is_meta_or_capability_query(text: str) -> bool:
+        capability_cues = {"what", "how", "help", "do", "can", "are", "is"}
+        identity_cues = {"you", "bot", "ai", "automated", "work", "responses", "generated", "capabilities"}
+        words = set(re.findall(r"[a-z0-9']+", text))
+        if not words:
+            return False
+        if "?" in text and words.intersection(capability_cues) and words.intersection(identity_cues):
+            return True
+        return "what do you do" in text or "what can you do" in text
 
 
 class ImageAssignmentExtractor:

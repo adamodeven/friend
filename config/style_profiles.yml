@@ -1,0 +1,19 @@
+default: casual_cool
+
+profiles:
+  casual_cool:
+    description: "smart, socially fluent, concise, current"
+    max_sms_chars: 320
+    slang_level: light
+    pressure_level: medium_high
+  direct:
+    description: "brief, decisive, practical"
+    max_sms_chars: 280
+    slang_level: low
+    pressure_level: high
+  more_serious:
+    description: "calm, serious, concise"
+    max_sms_chars: 320
+    slang_level: none
+    pressure_level: medium
+

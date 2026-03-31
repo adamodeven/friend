@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "friend-accountability"
+version = "0.1.0"
+description = "Personal AI accountability system over SMS"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "sqlalchemy>=2.0.30",
+  "alembic>=1.13.0",
+  "psycopg[binary]>=3.2.0",
+  "pydantic>=2.8.0",
+  "pydantic-settings>=2.4.0",
+  "python-dotenv>=1.0.1",
+  "python-multipart>=0.0.9",
+  "redis>=5.0.0",
+  "celery>=5.4.0",
+  "twilio>=9.2.0",
+  "openai>=1.51.0",
+  "httpx>=0.27.0",
+  "dateparser>=1.2.0",
+  "python-dateutil>=2.9.0",
+  "typer>=0.12.3",
+  "rich>=13.7.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.2",
+  "pytest-mock>=3.14.0",
+]
+
+[project.scripts]
+friend-admin = "app.cli.admin_cli:app"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

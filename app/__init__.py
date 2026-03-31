@@ -1,0 +1,2 @@
+"""Friend accountability app package."""
+

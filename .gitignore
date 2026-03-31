@@ -1,0 +1,14 @@
+.venv
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+*.pyo
+.DS_Store
+.env
+*.log
+data/
+friend_pg/
+friend_redis/
+coverage.xml
+

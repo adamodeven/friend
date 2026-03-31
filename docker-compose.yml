@@ -1,0 +1,74 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: friend-api
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - friend_data:/data
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: friend-worker
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - friend_data:/data
+    command: celery -A app.worker.celery_app.celery_app worker -l INFO
+
+  beat:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: friend-beat
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - friend_data:/data
+    command: celery -A app.worker.celery_app.celery_app beat -l INFO
+
+  postgres:
+    image: postgres:16
+    container_name: friend-postgres
+    environment:
+      POSTGRES_USER: friend
+      POSTGRES_PASSWORD: friend
+      POSTGRES_DB: friend
+    ports:
+      - "5432:5432"
+    volumes:
+      - friend_pg:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: friend-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - friend_redis:/data
+
+volumes:
+  friend_pg:
+  friend_redis:
+  friend_data:
+

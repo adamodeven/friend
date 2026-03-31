@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+from sqlalchemy import select
+
+from app.db.models import ScheduleBlock, Task, User
+from app.domain.state_engine import StateEngine
+from app.schemas.intent import ExtractedTask, IntentResult
+
+
+def test_add_task_creates_task_and_deadline_event(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    engine = StateEngine()
+    intent = IntentResult(
+        intent="add_task",
+        confidence=0.9,
+        task=ExtractedTask(title="Finish CAD", deadline_text="tomorrow night"),
+    )
+    summary = engine.apply_intent(db_session, user=user, intent=intent, raw_text="finish cad tomorrow night")
+    db_session.commit()
+
+    task = db_session.execute(select(Task).where(Task.title == "Finish CAD")).scalars().first()
+    assert task is not None
+    assert "added" in summary
+
+
+def test_context_signal_creates_schedule_block(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    engine = StateEngine()
+    intent = IntentResult(intent="context_signal", confidence=0.8, context_signal="in class rn")
+    engine.apply_intent(db_session, user=user, intent=intent, raw_text="in class rn")
+    db_session.commit()
+
+    block = db_session.execute(select(ScheduleBlock)).scalars().first()
+    assert block is not None
+    assert block.block_type == "in_class"
+

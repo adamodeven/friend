@@ -9,9 +9,9 @@ from celery import shared_task
 from sqlalchemy import select
 
 from app.db.models import DailySummarySnapshot, MessageDirection, ReminderStatus, Task, TaskStatus
-from app.db.repositories.message_repo import create_message
+from app.db.repositories.message_repo import create_message, inbound_message_exists
 from app.db.repositories.task_repo import list_active_tasks
-from app.db.repositories.user_repo import get_or_create_primary_user
+from app.db.repositories.user_repo import get_or_create_primary_user, get_user_by_phone
 from app.db.session import SessionLocal
 from app.domain.conversation_manager import ConversationManager
 from app.domain.reminder_engine import ReminderEngine
@@ -47,14 +47,37 @@ def process_inbound_sms_task(payload_data: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover
         session.rollback()
         logger.exception("inbound sms task failed for sid=%s: %s", payload.message_sid, exc)
+        fallback_body = "my bad, i hit a processing hiccup. resend that and i got you."
         try:
-            transport.send_sms(
-                to_number=payload.from_number,
-                body="my bad, i hit a processing hiccup. resend that and i got you.",
+            user = get_user_by_phone(session, payload.from_number) or get_or_create_primary_user(session)
+            if not inbound_message_exists(session, payload.message_sid):
+                create_message(
+                    session,
+                    user_id=user.id,
+                    direction=MessageDirection.inbound,
+                    body=payload.body,
+                    external_id=payload.message_sid,
+                    metadata_json={
+                        "from": payload.from_number,
+                        "to": payload.to_number,
+                        "num_media": payload.num_media,
+                        "processing_failed": True,
+                    },
+                )
+            sid = transport.send_sms(to_number=payload.from_number, body=fallback_body)
+            create_message(
+                session,
+                user_id=user.id,
+                direction=MessageDirection.outbound,
+                body=fallback_body,
+                external_id=sid,
+                metadata_json={"source": "fallback_after_processing_error"},
             )
+            session.commit()
         except Exception as send_exc:  # pragma: no cover
+            session.rollback()
             logger.exception("fallback sms send failed for sid=%s: %s", payload.message_sid, send_exc)
-        raise
+        return {"skipped_duplicate": False, "message_sid": payload.message_sid, "error": str(exc)}
     finally:
         session.close()
 

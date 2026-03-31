@@ -4,7 +4,6 @@ import base64
 import json
 import logging
 from typing import Any
-from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -14,8 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 class OllamaAdapter:
-    _availability_cache: dict[str, tuple[datetime, bool]] = {}
-
     def __init__(self) -> None:
         settings = get_settings()
         self._settings = settings
@@ -23,7 +20,7 @@ class OllamaAdapter:
         self._vision_model = settings.ollama_vision_model
         self._base_url = settings.ollama_base_url.rstrip("/")
         self._timeout = float(settings.ollama_timeout_seconds)
-        self._enabled = settings.llm_provider.lower() == "ollama" and self._is_available()
+        self._enabled = settings.llm_provider.lower() == "ollama"
 
     @property
     def enabled(self) -> bool:
@@ -92,15 +89,19 @@ class OllamaAdapter:
         return None
 
     def _chat_content(self, payload: dict[str, Any]) -> str | None:
-        try:
-            with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(f"{self._base_url}/api/chat", json=payload)
-                response.raise_for_status()
-                data = response.json()
-            return (data.get("message") or {}).get("content")
-        except Exception as exc:  # pragma: no cover
-            logger.exception("ollama chat failed: %s", exc)
-            return None
+        last_exc: Exception | None = None
+        for _ in range(2):
+            try:
+                with httpx.Client(timeout=self._timeout) as client:
+                    response = client.post(f"{self._base_url}/api/chat", json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                return (data.get("message") or {}).get("content")
+            except Exception as exc:  # pragma: no cover
+                last_exc = exc
+        if last_exc:  # pragma: no cover
+            logger.exception("ollama chat failed: %s", last_exc)
+        return None
 
     def _download_image_as_base64(self, image_url: str) -> str | None:
         try:
@@ -128,24 +129,3 @@ class OllamaAdapter:
             except json.JSONDecodeError:
                 return None
         return None
-
-    def _is_available(self) -> bool:
-        cached = self._availability_cache.get(self._base_url)
-        now = datetime.now(tz=timezone.utc)
-        if cached:
-            checked_at, available = cached
-            if now - checked_at <= timedelta(seconds=30):
-                return available
-        try:
-            with httpx.Client(timeout=httpx.Timeout(0.4, connect=0.4)) as client:
-                response = client.get(f"{self._base_url}/api/tags")
-                if response.status_code != 200:
-                    available = False
-                else:
-                    data = response.json()
-                    model_names = [m.get("name", "") for m in data.get("models", []) if isinstance(m, dict)]
-                    available = any(name == self._text_model for name in model_names)
-        except Exception:
-            available = False
-        self._availability_cache[self._base_url] = (now, available)
-        return available

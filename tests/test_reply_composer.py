@@ -11,12 +11,17 @@ class FakeAdapter:
         self.responses = responses
         self.enabled = enabled
         self.calls = 0
+        self.text_calls = 0
 
     def json_completion(self, *, system: str, user: str, model: str | None = None):  # noqa: ANN001
         self.calls += 1
         if not self.responses:
             return None
         return self.responses.pop(0)
+
+    def text_completion(self, *, system: str, user: str, model: str | None = None):  # noqa: ANN001
+        self.text_calls += 1
+        return None
 
 
 def _brief(latest: str, recent_thread: list[str] | None = None) -> ReplyBrief:
@@ -61,3 +66,17 @@ def test_repetition_guard_triggers_regeneration():
     assert reply.regenerated_for_repetition is True
     assert "main thing tonight" in " ".join(reply.messages).lower()
 
+
+def test_plain_text_recovery_path_before_fallback():
+    class JsonFailTextPassAdapter(FakeAdapter):
+        def text_completion(self, *, system: str, user: str, model: str | None = None):  # noqa: ANN001
+            self.text_calls += 1
+            return "yo i got you\n\nstart with a 20 min pass, then ping me."
+
+    adapter = JsonFailTextPassAdapter([None], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("i'm cooked"))
+    assert adapter.calls >= 1
+    assert adapter.text_calls >= 1
+    assert reply.used_fallback is False
+    assert len(reply.messages) >= 1

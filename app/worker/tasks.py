@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from celery import shared_task
@@ -12,10 +13,50 @@ from app.db.repositories.message_repo import create_message
 from app.db.repositories.task_repo import list_active_tasks
 from app.db.repositories.user_repo import get_or_create_primary_user
 from app.db.session import SessionLocal
+from app.domain.conversation_manager import ConversationManager
 from app.domain.reminder_engine import ReminderEngine
+from app.schemas.transport import InboundSmsPayload
 from app.transport.twilio_adapter import TwilioTransport
 
 logger = logging.getLogger(__name__)
+
+
+@shared_task(name="app.worker.tasks.process_inbound_sms_task")
+def process_inbound_sms_task(payload_data: dict[str, Any]) -> dict[str, Any]:
+    session = SessionLocal()
+    transport = TwilioTransport()
+    manager = ConversationManager()
+    payload = InboundSmsPayload.model_validate(payload_data)
+    try:
+        result = manager.process_inbound(session, payload)
+        if result.skipped_duplicate:
+            session.commit()
+            return {"skipped_duplicate": True, "message_sid": payload.message_sid}
+
+        sent = 0
+        for chunk in result.outgoing_messages:
+            transport.send_sms(to_number=payload.from_number, body=chunk)
+            sent += 1
+
+        session.commit()
+        return {
+            "skipped_duplicate": False,
+            "message_sid": payload.message_sid,
+            "outgoing_count": sent,
+        }
+    except Exception as exc:  # pragma: no cover
+        session.rollback()
+        logger.exception("inbound sms task failed for sid=%s: %s", payload.message_sid, exc)
+        try:
+            transport.send_sms(
+                to_number=payload.from_number,
+                body="my bad, i hit a processing hiccup. resend that and i got you.",
+            )
+        except Exception as send_exc:  # pragma: no cover
+            logger.exception("fallback sms send failed for sid=%s: %s", payload.message_sid, send_exc)
+        raise
+    finally:
+        session.close()
 
 
 @shared_task(name="app.worker.tasks.schedule_reminders_task")
@@ -120,4 +161,3 @@ def _compose_reminder_text(*, task_title: str, escalation: int) -> str:
     if escalation == 1:
         return f"still waiting on '{task_title}'. what's the blocker?"
     return f"we're slipping on '{task_title}'. give me the next concrete move right now."
-

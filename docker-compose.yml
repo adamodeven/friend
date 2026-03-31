@@ -118,15 +118,18 @@ services:
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_TEXT_MODEL: ${OLLAMA_TEXT_MODEL:-llama3.1:8b}
       OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-llava:13b}
+      OLLAMA_PULL_VISION_ON_STARTUP: ${OLLAMA_PULL_VISION_ON_STARTUP:-false}
     entrypoint:
       - /bin/sh
       - -ec
       - |
         echo "pulling ollama text model: ${OLLAMA_TEXT_MODEL}"
         ollama pull "${OLLAMA_TEXT_MODEL}"
-        if [ "${OLLAMA_VISION_MODEL}" != "${OLLAMA_TEXT_MODEL}" ]; then
+        if [ "${OLLAMA_PULL_VISION_ON_STARTUP}" = "true" ] && [ "${OLLAMA_VISION_MODEL}" != "${OLLAMA_TEXT_MODEL}" ]; then
           echo "pulling ollama vision model: ${OLLAMA_VISION_MODEL}"
           ollama pull "${OLLAMA_VISION_MODEL}"
+        else
+          echo "skipping vision model pre-pull (set OLLAMA_PULL_VISION_ON_STARTUP=true to enable)"
         fi
         echo "ollama models ready"
     restart: "no"

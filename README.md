@@ -86,7 +86,8 @@ celery -A app.worker.celery_app.celery_app worker -l INFO
 celery -A app.worker.celery_app.celery_app beat -l INFO
 ```
 10. First run note:
-- `ollama-init` auto-pulls `OLLAMA_TEXT_MODEL` and `OLLAMA_VISION_MODEL` for you.
+- `ollama-init` auto-pulls `OLLAMA_TEXT_MODEL` for you.
+- set `OLLAMA_PULL_VISION_ON_STARTUP=true` if you also want pre-pull of `OLLAMA_VISION_MODEL`.
 - first boot can take a while while models download.
 
 ## 4) Docker Deploy (Portainer-Friendly)
@@ -133,6 +134,7 @@ https://<your-domain>/webhooks/twilio
 - Default models in this repo:
   - `OLLAMA_TEXT_MODEL=llama3.1:8b`
   - `OLLAMA_VISION_MODEL=llava:13b`
+- `OLLAMA_PULL_VISION_ON_STARTUP=false` by default so chat starts faster.
 - Model pull is automated by the `ollama-init` compose service.
 
 ## 7) Simulate Inbound Messages
@@ -230,6 +232,7 @@ Required for production:
 - `OLLAMA_BASE_URL`
 - `OLLAMA_TEXT_MODEL`
 - `OLLAMA_VISION_MODEL`
+- `OLLAMA_PULL_VISION_ON_STARTUP`
 - `ADMIN_TOKEN`
 - `USER_PHONE_NUMBER`
 

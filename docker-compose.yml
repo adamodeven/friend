@@ -11,8 +11,12 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      ollama-init:
+        condition: service_completed_successfully
     volumes:
       - friend_data:/data
     command: >
@@ -27,8 +31,12 @@ services:
     env_file:
       - .env
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      ollama-init:
+        condition: service_completed_successfully
     volumes:
       - friend_data:/data
     command: celery -A app.worker.celery_app.celery_app worker -l INFO
@@ -41,8 +49,12 @@ services:
     env_file:
       - .env
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      ollama-init:
+        condition: service_completed_successfully
     volumes:
       - friend_data:/data
     command: celery -A app.worker.celery_app.celery_app beat -l INFO
@@ -67,8 +79,44 @@ services:
     volumes:
       - friend_redis:/data
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: friend-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - friend_ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: friend-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_TEXT_MODEL: ${OLLAMA_TEXT_MODEL:-llama3.1:8b}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-llava:13b}
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      set -e;
+      echo "pulling ollama text model: ${OLLAMA_TEXT_MODEL}";
+      ollama pull "${OLLAMA_TEXT_MODEL}";
+      if [ "${OLLAMA_VISION_MODEL}" != "${OLLAMA_TEXT_MODEL}" ]; then
+        echo "pulling ollama vision model: ${OLLAMA_VISION_MODEL}";
+        ollama pull "${OLLAMA_VISION_MODEL}";
+      fi;
+      echo "ollama models ready";
+    restart: "no"
+
 volumes:
   friend_pg:
   friend_redis:
   friend_data:
-
+  friend_ollama:

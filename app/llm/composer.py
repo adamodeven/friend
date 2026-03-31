@@ -3,14 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timezone as dt_timezone
 
 from app.core.config import get_settings
-from app.llm.client import OpenAIAdapter
+from app.llm.client import OllamaAdapter
 from app.llm.style import chunk_sms, get_style_profile
 from app.schemas.intent import ConversationReply, IntentResult
 
 
 class ReplyComposer:
-    def __init__(self, adapter: OpenAIAdapter | None = None) -> None:
-        self.adapter = adapter or OpenAIAdapter()
+    def __init__(self, adapter: OllamaAdapter | None = None) -> None:
+        self.adapter = adapter or OllamaAdapter()
         self.settings = get_settings()
 
     def compose(

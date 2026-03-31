@@ -4,13 +4,13 @@ import re
 from datetime import datetime
 
 from app.core.time_utils import parse_human_time
-from app.llm.client import OpenAIAdapter
+from app.llm.client import OllamaAdapter
 from app.schemas.intent import ExtractedTask, IntentResult, IntentName, ImageExtractionResult
 
 
 class IntentExtractor:
-    def __init__(self, adapter: OpenAIAdapter | None = None) -> None:
-        self.adapter = adapter or OpenAIAdapter()
+    def __init__(self, adapter: OllamaAdapter | None = None) -> None:
+        self.adapter = adapter or OllamaAdapter()
 
     def extract(self, text: str, timezone: str) -> IntentResult:
         llm_result = self._extract_with_llm(text, timezone)
@@ -132,8 +132,8 @@ class IntentExtractor:
 
 
 class ImageAssignmentExtractor:
-    def __init__(self, adapter: OpenAIAdapter | None = None) -> None:
-        self.adapter = adapter or OpenAIAdapter()
+    def __init__(self, adapter: OllamaAdapter | None = None) -> None:
+        self.adapter = adapter or OllamaAdapter()
 
     def extract(self, image_url: str, timezone: str) -> ImageExtractionResult:
         payload = self.adapter.vision_json(
@@ -151,4 +151,3 @@ class ImageAssignmentExtractor:
             parsed, _ = parse_human_time(result.due_text, timezone=timezone)
             result.due_at = parsed
         return result
-

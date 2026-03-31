@@ -7,7 +7,7 @@ Core stack:
 - PostgreSQL source of truth
 - Redis + Celery worker/beat for background reminders
 - Twilio SMS/MMS transport
-- OpenAI for intent extraction, conversational style, and image understanding
+- Ollama (local) for intent extraction, conversational style, and image understanding
 - Deterministic scheduling/state transitions in domain services
 
 ## 1) What This Repo Includes
@@ -32,7 +32,7 @@ app/
   core/                   # config, logging, security, time parsing helpers
   db/                     # SQLAlchemy models, session, repositories
   domain/                 # deterministic state engine, reminders, timeline, memory helpers
-  llm/                    # OpenAI adapters, extraction, reply composer, style/chunking
+  llm/                    # Ollama adapter, extraction, reply composer, style/chunking
   transport/              # Twilio transport adapter
   ingestion/              # attachment download + image extraction
   worker/                 # Celery app + scheduled tasks
@@ -61,9 +61,9 @@ cp .env.example .env
 ```bash
 python3 -m pip install -e '.[dev]'
 ```
-4. Start Postgres + Redis:
+4. Start core services for local app/worker run:
 ```bash
-docker compose up -d postgres redis
+docker compose up -d postgres redis ollama ollama-init
 ```
 5. Run migrations:
 ```bash
@@ -85,17 +85,26 @@ celery -A app.worker.celery_app.celery_app worker -l INFO
 ```bash
 celery -A app.worker.celery_app.celery_app beat -l INFO
 ```
+10. First run note:
+- `ollama-init` auto-pulls `OLLAMA_TEXT_MODEL` and `OLLAMA_VISION_MODEL` for you.
+- first boot can take a while while models download.
 
 ## 4) Docker Deploy (Portainer-Friendly)
 
 1. Copy `docker-compose.yml` into Portainer stack.
 2. Add matching `.env` values in Portainer environment.
 3. Deploy stack.
-4. API starts with `alembic upgrade head` automatically.
+4. `ollama-init` automatically pulls your configured models before API/worker/beat start.
+5. API starts with `alembic upgrade head` automatically.
 
 For local Docker deploy:
 ```bash
 docker compose up --build
+```
+
+If you change model names later and want to pull again:
+```bash
+docker compose run --rm ollama-init
 ```
 
 ## 5) Twilio Setup
@@ -112,7 +121,17 @@ https://<your-domain>/webhooks/twilio
 - `TWILIO_FROM_NUMBER`
 - `TWILIO_TO_NUMBER` (your personal number for one-user mode)
 
-## 6) Simulate Inbound Messages
+## 6) Ollama Setup
+
+- `LLM_PROVIDER=ollama`
+- For Docker stack services, `OLLAMA_BASE_URL=http://ollama:11434`
+- For host-local API process, use `OLLAMA_BASE_URL=http://localhost:11434`
+- Default models in this repo:
+  - `OLLAMA_TEXT_MODEL=llama3.1:8b`
+  - `OLLAMA_VISION_MODEL=llava:13b`
+- Model pull is automated by the `ollama-init` compose service.
+
+## 7) Simulate Inbound Messages
 
 ### Via Twilio-form webhook simulation
 ```bash
@@ -132,7 +151,7 @@ curl -X POST http://localhost:8000/api/messages/simulate \
   }'
 ```
 
-## 7) Admin/Debug Surface
+## 8) Admin/Debug Surface
 
 Protected by `X-Admin-Token`.
 
@@ -143,7 +162,7 @@ Protected by `X-Admin-Token`.
 - `GET /api/admin/notes/recent`
 - `POST /api/admin/reminders/run` (forces reminder schedule + send pass)
 
-## 8) CLI Commands
+## 9) CLI Commands
 
 ```bash
 friend-admin active-tasks
@@ -152,7 +171,7 @@ friend-admin messages --limit 20
 friend-admin run-reminders
 ```
 
-## 9) Architecture Notes
+## 10) Architecture Notes
 
 ### Deterministic source of truth
 - Task/project/reminder/deadline state lives in Postgres.
@@ -175,7 +194,7 @@ friend-admin run-reminders
 - Domain logic isolated in `app/domain`
 - Storage isolated in `app/db`
 
-## 10) Environment Variables You Must Fill
+## 11) Environment Variables You Must Fill
 
 Required for production:
 - `DATABASE_URL`
@@ -186,7 +205,10 @@ Required for production:
 - `TWILIO_AUTH_TOKEN`
 - `TWILIO_FROM_NUMBER`
 - `TWILIO_TO_NUMBER`
-- `OPENAI_API_KEY`
+- `LLM_PROVIDER`
+- `OLLAMA_BASE_URL`
+- `OLLAMA_TEXT_MODEL`
+- `OLLAMA_VISION_MODEL`
 - `ADMIN_TOKEN`
 - `USER_PHONE_NUMBER`
 
@@ -195,7 +217,7 @@ Recommended:
 - `DEFAULT_STYLE`
 - `ATTACHMENTS_DIR`
 
-## 11) Tests
+## 12) Tests
 
 ```bash
 pytest -q
@@ -207,7 +229,7 @@ Current suite validates:
 - reminder scheduling + dedup spacing behavior
 - inbound webhook idempotency behavior
 
-## 12) Known MVP Limitations / Next Upgrades
+## 13) Known MVP Limitations / Next Upgrades
 
 - Single-user mode only (by design for now)
 - Attachment OCR uses model vision parsing directly; no dedicated OCR fallback yet
@@ -221,4 +243,3 @@ Suggested next upgrades:
 - Add richer dependency auto-linking and critical-path views
 - Add backup automation (pg_dump + encrypted object storage)
 - Add optional secondary transport (iMessage bridge or WhatsApp) via adapter swap
-

@@ -20,9 +20,11 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
 
-    openai_api_key: str = ""
-    openai_text_model: str = "gpt-5.4-mini"
-    openai_vision_model: str = "gpt-5.4-mini"
+    llm_provider: str = "none"
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_text_model: str = "llama3.1:8b"
+    ollama_vision_model: str = "llava:13b"
+    ollama_timeout_seconds: int = 90
 
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
@@ -54,4 +56,3 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-

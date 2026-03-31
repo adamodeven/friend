@@ -135,6 +135,7 @@ https://<your-domain>/webhooks/twilio
   - `OLLAMA_TEXT_MODEL=llama3.1:8b`
   - `OLLAMA_VISION_MODEL=llava:13b`
 - `OLLAMA_PULL_VISION_ON_STARTUP=false` by default so chat starts faster.
+- `OLLAMA_TIMEOUT_SECONDS=300` default favors reliability on CPU-only hosts.
 - Model pull is automated by the `ollama-init` compose service.
 
 ## 7) Simulate Inbound Messages
@@ -233,6 +234,7 @@ Required for production:
 - `OLLAMA_TEXT_MODEL`
 - `OLLAMA_VISION_MODEL`
 - `OLLAMA_PULL_VISION_ON_STARTUP`
+- `OLLAMA_TIMEOUT_SECONDS`
 - `ADMIN_TOKEN`
 - `USER_PHONE_NUMBER`
 

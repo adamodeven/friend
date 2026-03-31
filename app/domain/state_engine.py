@@ -83,6 +83,12 @@ class StateEngine:
             else:
                 action_summary = self.timeline.build_today_view(session, user.id, user.timezone)
 
+        elif intent.intent == "status_query":
+            action_summary = (
+                "i keep your task graph live over text: deadlines, blockers, dependencies, reminders, and replanning. "
+                "drop anything you need done and i'll track it + push follow-through."
+            )
+
         elif intent.intent == "context_signal":
             starts, ends = time_window_for_context(intent.context_signal or raw_text, user.timezone)
             block = ScheduleBlock(
@@ -122,7 +128,7 @@ class StateEngine:
             else:
                 action_summary = "i can update it, just name the task directly once."
         else:
-            action_summary = self.timeline.next_hour_recommendation(session, user.id, user.timezone)
+            action_summary = self._general_chat_reply(raw_text, session, user)
 
         self._update_profile_memory(session, user.id, raw_text)
         return action_summary
@@ -182,3 +188,9 @@ class StateEngine:
             prefs = dict(profile.planning_preferences)
             prefs["last_update_at"] = datetime.now(tz=timezone.utc).isoformat()
             profile.planning_preferences = prefs
+
+    def _general_chat_reply(self, raw_text: str, session: Session, user) -> str:
+        lowered = raw_text.lower().strip()
+        if lowered in {"hey", "yo", "sup", "hiya", "hello", "hi", "test"}:
+            return "yo, i'm here. text what you need done + due date and i'll handle the tracking."
+        return self.timeline.next_hour_recommendation(session, user.id, user.timezone)

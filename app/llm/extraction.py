@@ -71,6 +71,10 @@ class IntentExtractor:
             intent = "context_signal"
             context_signal = lowered
             confidence = 0.82
+        elif any(token in lowered for token in ["what do you do", "who are you", "what can you do", "how do you work", "help me plan"]):
+            intent = "status_query"
+            confidence = 0.9
+            return IntentResult(intent=intent, confidence=confidence, summary="user asked assistant capabilities")
         elif any(token in lowered for token in ["what do i have", "what's due", "deadlines", "today", "this week"]):
             intent = "timeline_query"
             confidence = 0.8

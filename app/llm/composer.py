@@ -67,6 +67,8 @@ class ReplyComposer:
             return intent.clarification_question
         if intent.intent == "timeline_query":
             return f"bet. here's the plan: {action_summary}"
+        if intent.intent == "status_query":
+            return f"quick version: {action_summary}"
         if intent.intent == "context_signal":
             return "all good, i’ll chill reminders for now and hit you after that."
         if intent.intent == "complete_task":

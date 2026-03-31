@@ -20,3 +20,8 @@ def test_extract_timeline_query():
     result = extractor.extract("what do I have due this week", "America/New_York")
     assert result.intent == "timeline_query"
 
+
+def test_extract_status_query():
+    extractor = IntentExtractor()
+    result = extractor.extract("what do you do?", "America/New_York")
+    assert result.intent == "status_query"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
@@ -11,6 +13,7 @@ from app.schemas.transport import InboundSmsPayload
 from app.transport.twilio_adapter import TwilioTransport
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/twilio", response_class=PlainTextResponse)
@@ -30,12 +33,20 @@ async def twilio_webhook(
 
     payload = InboundSmsPayload.from_twilio_form(data)
     manager = ConversationManager()
-    result = manager.process_inbound(session, payload)
-    if result.skipped_duplicate:
-        return "ok"
+    try:
+        result = manager.process_inbound(session, payload)
+        if result.skipped_duplicate:
+            return "ok"
 
-    for chunk in result.outgoing_messages:
-        transport.send_sms(to_number=payload.from_number, body=chunk)
+        for chunk in result.outgoing_messages:
+            transport.send_sms(to_number=payload.from_number, body=chunk)
 
-    session.commit()
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        logger.exception("twilio webhook processing failed: %s", exc)
+        transport.send_sms(
+            to_number=payload.from_number,
+            body="my bad, i hit a processing hiccup. resend that and i got you.",
+        )
     return "ok"

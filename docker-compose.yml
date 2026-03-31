@@ -118,17 +118,15 @@ services:
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_TEXT_MODEL: ${OLLAMA_TEXT_MODEL:-llama3.1:8b}
       OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-llava:13b}
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        echo "pulling ollama text model: ${OLLAMA_TEXT_MODEL}"
-        ollama pull "${OLLAMA_TEXT_MODEL}"
-        if [ "${OLLAMA_VISION_MODEL}" != "${OLLAMA_TEXT_MODEL}" ]; then
-          echo "pulling ollama vision model: ${OLLAMA_VISION_MODEL}"
-          ollama pull "${OLLAMA_VISION_MODEL}"
-        fi
-        echo "ollama models ready"
+    entrypoint: ["/bin/sh", "-ec"]
+    command: |
+      echo "pulling ollama text model: ${OLLAMA_TEXT_MODEL}"
+      ollama pull "${OLLAMA_TEXT_MODEL}"
+      if [ "${OLLAMA_VISION_MODEL}" != "${OLLAMA_TEXT_MODEL}" ]; then
+        echo "pulling ollama vision model: ${OLLAMA_VISION_MODEL}"
+        ollama pull "${OLLAMA_VISION_MODEL}"
+      fi
+      echo "ollama models ready"
     restart: "no"
 
 volumes:

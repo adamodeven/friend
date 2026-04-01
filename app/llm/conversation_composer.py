@@ -304,6 +304,8 @@ class ConversationComposer:
             "upcoming deadlines:",
             "key facts",
             "recent thread",
+            "be direct about whether this reply is live-generated right now",
+            "confirm current system status plainly",
         ]
 
     @staticmethod
@@ -361,6 +363,9 @@ class ConversationComposer:
                 return True
             if len(user_words) < 8 and ratio >= 0.97:
                 return True
+            overlap_ratio = cls._lexical_overlap_ratio(bubble_norm, user_norm)
+            if len(user_words) >= 6 and overlap_ratio >= 0.78:
+                return True
         return False
 
     @staticmethod
@@ -396,3 +401,12 @@ class ConversationComposer:
                 break
             overlap += 1
         return overlap
+
+    @staticmethod
+    def _lexical_overlap_ratio(text_a: str, text_b: str) -> float:
+        words_a = set(text_a.split())
+        words_b = set(text_b.split())
+        if not words_a or not words_b:
+            return 0.0
+        shared = words_a.intersection(words_b)
+        return len(shared) / float(min(len(words_a), len(words_b)))

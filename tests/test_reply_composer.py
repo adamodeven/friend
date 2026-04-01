@@ -121,6 +121,15 @@ def test_composer_repairs_when_output_leaks_context_labels():
     assert "active tasks:" not in " ".join(reply.messages).lower()
 
 
+def test_composer_repairs_when_output_leaks_instructional_phrase():
+    adapter = FakeAdapter(["be direct about whether this reply is live-generated right now"], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_answer_brief("are these canned responses or live ai generated?"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    assert "be direct about whether this reply is live-generated right now" not in " ".join(reply.messages).lower()
+
+
 def test_composer_repairs_when_output_looks_like_internal_task_dump():
     adapter = FakeAdapter(["status active p2 due negative"], enabled=True)
     composer = ConversationComposer(adapter=adapter)

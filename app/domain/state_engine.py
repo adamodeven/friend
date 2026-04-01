@@ -182,9 +182,9 @@ class StateEngine:
             outcome.emotional_tone = "casual"
             lowered = raw_text.lower()
             if "canned" in lowered or "live" in lowered or "generated" in lowered:
-                outcome.key_facts_to_include.append("be direct about whether this reply is live-generated right now")
+                outcome.key_facts_to_include.append("these replies are live-generated right now, not canned templates")
             if "work" in lowered or "working" in lowered:
-                outcome.key_facts_to_include.append("confirm current system status plainly")
+                outcome.key_facts_to_include.append("system is up and processing your messages")
             if any(token in lowered for token in ["live", "working", "online", "on now"]):
                 outcome.key_facts_to_include.append("yes, i'm live right now and i received this message")
             outcome.should_ask_question = False

@@ -154,6 +154,38 @@ def test_composer_repairs_when_output_is_truncated_tail():
     assert not " ".join(reply.messages).lower().rstrip().endswith(" at")
 
 
+def test_composer_repairs_when_output_leaks_status_priority_dump():
+    adapter = FakeAdapter(["i submit my scout job application tomorrow morning status active priority 2 due no deadline"], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="acknowledge_new_task",
+            latest_user_message="and then tmr morning i need to submit my scout job application",
+            suggested_next_step="do a final proofread, then submit scout job application",
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "status active" not in lowered
+    assert "priority 2" not in lowered
+
+
+def test_composer_repairs_when_output_leaks_markdown_quote_list():
+    adapter = FakeAdapter(
+        ["i keep getting distracted, so i'll stay on track. here are my thoughts:\n\n* \"ngl i need help prioritizing tasks\""],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("no why would i break that up its just one thing in the morning"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "here are my thoughts" not in lowered
+    assert '* "' not in lowered
+
+
 def test_composer_repairs_when_output_leaks_instructional_phrase():
     adapter = FakeAdapter(["be direct about whether this reply is live-generated right now"], enabled=True)
     composer = ConversationComposer(adapter=adapter)

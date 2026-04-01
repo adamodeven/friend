@@ -91,6 +91,7 @@ class ConversationComposer:
             or self._looks_low_quality(combined, brief.latest_user_message)
             or self._has_parrot_bubble(messages, brief.latest_user_message)
             or self._has_nonsequitur_for_short_checkin(messages, brief)
+            or self._goal_alignment_needs_repair(messages, brief)
             or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
             or self._answer_quality_needs_repair(messages, brief)
         )
@@ -316,6 +317,7 @@ class ConversationComposer:
             or self._looks_low_quality(combined, brief.latest_user_message)
             or self._has_parrot_bubble(messages, brief.latest_user_message)
             or self._has_nonsequitur_for_short_checkin(messages, brief)
+            or self._goal_alignment_needs_repair(messages, brief)
             or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
         )
 
@@ -359,6 +361,7 @@ class ConversationComposer:
             "here's the response",
             "checkpoint 1",
             "i've been noticing your responses",
+            "here are my thoughts:",
             "be direct about whether this reply is live-generated right now",
             "confirm current system status plainly",
         ]
@@ -382,11 +385,19 @@ class ConversationComposer:
             return True
         if cls._looks_hard_structured_leak(lowered):
             return True
-        if re.search(r"(^|\n)\s*(#{1,6}|\*\*|-\s+|\d+\.)", candidate):
+        if re.search(r"(^|\n)\s*(#{1,6}|\*\*|\*\s+|-\s+|\d+\.)", candidate):
             return True
         if "```" in candidate:
             return True
+        if re.search(r'\*\s*".+?"', candidate):
+            return True
         if re.search(r"\bstatus\s+[a-z_]+\s+p[0-9]\b", lowered):
+            return True
+        if re.search(r"\bstatus\s+(active|blocked|completed|archived)\b", lowered):
+            return True
+        if re.search(r"\bpriority\s+[0-9]\b", lowered):
+            return True
+        if "due no deadline" in lowered:
             return True
         if "due negative" in lowered:
             return True
@@ -519,6 +530,31 @@ class ConversationComposer:
             "task graph",
         ]
         return any(marker in combined for marker in markers)
+
+    @classmethod
+    def _goal_alignment_needs_repair(cls, messages: list[str], brief: ReplyBrief) -> bool:
+        if not messages:
+            return True
+        combined = " ".join(messages).lower().strip()
+        if not combined:
+            return True
+        if "here are my thoughts:" in combined or re.search(r'\*\s*".+?"', combined):
+            return True
+        if re.search(r"\bstatus\s+(active|blocked|completed|archived)\b", combined):
+            return True
+        if re.search(r"\bpriority\s+[0-9]\b", combined):
+            return True
+
+        if brief.response_goal == "acknowledge_new_task":
+            if "what's on your mind?" in combined:
+                return True
+            if "captured" not in combined and "next move" not in combined and "submit" not in combined and "deadline" not in combined:
+                return True
+
+        if brief.response_goal == "open_conversation" and "status active" in combined:
+            return True
+
+        return False
 
     @staticmethod
     def _leading_overlap_words(text_a: str, text_b: str) -> int:

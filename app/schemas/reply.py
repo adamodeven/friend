@@ -63,6 +63,7 @@ class ReplyBrief(BaseModel):
     latest_user_message: str
     recent_thread: list[str] = Field(default_factory=list)
     operational_reason: str | None = None
+    is_short_checkin: bool = False
     generated_at: datetime
 
 
@@ -70,4 +71,3 @@ class ComposedReply(BaseModel):
     messages: list[str]
     used_fallback: bool = False
     regenerated_for_repetition: bool = False
-

@@ -30,3 +30,28 @@ def test_twilio_webhook_enqueues_background_task(monkeypatch) -> None:
     assert response.text == "ok"
     assert captured["payload"]["MessageSid"] == "SMTEST123"
     assert captured["payload"]["Body"] == "is this thing on??"
+
+
+def test_twilio_webhook_accepts_smssid_alias(monkeypatch) -> None:
+    captured: dict = {}
+
+    def fake_delay(payload: dict) -> None:
+        captured["payload"] = payload
+
+    monkeypatch.setattr(twilio_route.process_inbound_sms_task, "delay", fake_delay)
+
+    client = TestClient(app)
+    response = client.post(
+        "/webhooks/twilio",
+        data={
+            "From": "+12488290272",
+            "To": "+17622516270",
+            "SmsSid": "SMALIASED123",
+            "NumMedia": "0",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.text == "ok"
+    assert captured["payload"]["MessageSid"] == "SMALIASED123"
+    assert captured["payload"]["Body"] == ""

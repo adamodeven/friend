@@ -4,7 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from app.db.models import Task, TaskStatus, User
+from app.db.models import ConversationMessage, MessageDirection, Task, TaskStatus, User
 from app.domain.reply_brief_builder import ReplyBriefBuilder
 from app.schemas.reply import StateOutcome
 
@@ -84,3 +84,28 @@ def test_open_conversation_brief_omits_task_context_when_message_is_casual(db_se
     )
     assert brief.active_task_context == []
     assert brief.deadline_context == []
+
+
+def test_short_checkin_brief_marks_flag_and_limits_thread(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    db_session.add_all(
+        [
+            ConversationMessage(user_id=user.id, direction=MessageDirection.inbound, body="older one"),
+            ConversationMessage(user_id=user.id, direction=MessageDirection.outbound, body="older two"),
+            ConversationMessage(user_id=user.id, direction=MessageDirection.inbound, body="older three"),
+            ConversationMessage(user_id=user.id, direction=MessageDirection.outbound, body="older four"),
+            ConversationMessage(user_id=user.id, direction=MessageDirection.inbound, body="older five"),
+        ]
+    )
+    db_session.commit()
+
+    builder = ReplyBriefBuilder()
+    outcome = StateOutcome(response_goal="open_conversation")
+    brief = builder.build(
+        db_session,
+        user=user,
+        latest_user_message="yo whatup",
+        outcome=outcome,
+    )
+    assert brief.is_short_checkin is True
+    assert len(brief.recent_thread) <= 3

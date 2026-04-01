@@ -40,11 +40,12 @@ class FakeAdapter:
         return self.text_responses.pop(0)
 
 
-def _brief(latest: str, recent_thread: list[str] | None = None) -> ReplyBrief:
+def _brief(latest: str, recent_thread: list[str] | None = None, *, short_checkin: bool = False) -> ReplyBrief:
     return ReplyBrief(
         response_goal="open_conversation",
         latest_user_message=latest,
         recent_thread=recent_thread or [],
+        is_short_checkin=short_checkin,
         generated_at=datetime.now(),
     )
 
@@ -227,3 +228,27 @@ def test_answer_quality_guard_repairs_run_on_direct_answer():
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
     assert "not canned" in " ".join(reply.messages).lower() or "live" in " ".join(reply.messages).lower()
+
+
+def test_short_checkin_repair_rejects_nonsequitur_context_bleed():
+    adapter = FakeAdapter(
+        ["I'm back.\n\nhey, i saw where things are going - your responses got a bit scattered so what's on your mind?"],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("yo whatup", short_checkin=True))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "scattered" not in lowered
+    assert "out of hand" not in lowered
+    assert len(reply.messages) <= 2
+
+
+def test_short_checkin_merges_tiny_lead_bubble():
+    adapter = FakeAdapter(["i'm back.\n\nyo i'm here. what's the move right now?"], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("hey", short_checkin=True))
+    assert reply.used_fallback is False
+    assert len(reply.messages) == 1
+    assert "what's the move right now?" in reply.messages[0].lower()

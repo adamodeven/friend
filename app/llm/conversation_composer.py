@@ -32,6 +32,7 @@ class ConversationComposer:
                 max_chunks=brief.max_chunks,
             )
             normalized = self._postprocess_messages(normalized, brief)
+            normalized = self._merge_tiny_lead_bubble(normalized, brief)
             if not normalized or self._is_unacceptable_output(normalized, brief):
                 fallback = self._fallback_messages(brief)
                 return ComposedReply(messages=fallback, used_fallback=True, regenerated_for_repetition=regenerated)
@@ -89,6 +90,7 @@ class ConversationComposer:
             self._looks_internal_or_robotic(combined)
             or self._looks_low_quality(combined, brief.latest_user_message)
             or self._has_parrot_bubble(messages, brief.latest_user_message)
+            or self._has_nonsequitur_for_short_checkin(messages, brief)
             or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
             or self._answer_quality_needs_repair(messages, brief)
         )
@@ -131,6 +133,8 @@ class ConversationComposer:
             "Sound like a real person texting: casual, modern, sharp, socially fluent, concise. "
             "Never robotic, corporate, therapist-y, or generic productivity-bot language. "
             "If user asks what you do or whether replies are canned/live, answer directly in plain language first. "
+            "If latest user message is a short greeting/check-in, keep it present-tense and lightweight. "
+            "Do not drag in old thread drama unless the user asked about it in this message. "
             "For small-talk or quick checks, do not mirror the user's exact words back. "
             "Never start your first bubble with the same 4+ word sequence the user just sent. "
             "No em dashes, no markdown, no labels, no numbering. "
@@ -150,6 +154,7 @@ class ConversationComposer:
         avoid = avoid_phrases[:3] or ["(none)"]
         question = brief.question_if_needed or "(none)"
         next_step = brief.suggested_next_step or "(none)"
+        short_checkin = "yes" if brief.is_short_checkin else "no"
 
         def _lines(items: list[str]) -> str:
             return "\n".join(f"- {item}" for item in items)
@@ -162,6 +167,7 @@ class ConversationComposer:
                 f"- tone: {brief.style_mode}\n"
                 f"- urgency: {brief.urgency_level}\n"
                 f"- reason: {brief.operational_reason or '(none)'}\n"
+                f"- short checkin: {short_checkin}\n"
                 f"- facts: {'; '.join(key_facts)}\n"
                 f"- next step: {next_step}\n"
                 f"- question: {question}\n"
@@ -182,6 +188,7 @@ class ConversationComposer:
             f"URGENCY: {brief.urgency_level}\n"
             f"TONE MODE: {brief.style_mode}\n"
             f"REASON FOR REPLY: {brief.operational_reason or '(none)'}\n\n"
+            f"SHORT CHECKIN: {short_checkin}\n\n"
             f"KEY FACTS TO INCLUDE:\n{_lines(key_facts)}\n\n"
             f"SUGGESTED NEXT STEP:\n{next_step}\n\n"
             f"QUESTION IF NEEDED:\n{question}\n\n"
@@ -267,6 +274,8 @@ class ConversationComposer:
                 text = f"{direct_fact} {brief.question_if_needed or ''}".strip()
             else:
                 text = f"{opening} i'm live and tracking this."
+        elif brief.is_short_checkin:
+            text = f"{opening} i'm here. what's the main move right now?"
         elif brief.response_goal == "react_to_progress":
             step = brief.suggested_next_step or "what's the next concrete step?"
             text = f"{opening} that's real progress. {step}"
@@ -291,10 +300,10 @@ class ConversationComposer:
     @staticmethod
     def _repair_opening(seed: str, recent_assistant: list[str]) -> str:
         options = [
-            "yep, got you.",
-            "i'm with you.",
+            "yep, i'm here.",
+            "i got you.",
             "got it.",
-            "i see where you're at.",
+            "locked in.",
         ]
         digest = hashlib.sha1(f"{seed}|{'|'.join(recent_assistant[-2:])}".encode("utf-8")).hexdigest()
         idx = int(digest[:8], 16) % len(options)
@@ -306,6 +315,7 @@ class ConversationComposer:
             self._looks_internal_or_robotic(combined)
             or self._looks_low_quality(combined, brief.latest_user_message)
             or self._has_parrot_bubble(messages, brief.latest_user_message)
+            or self._has_nonsequitur_for_short_checkin(messages, brief)
             or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
         )
 
@@ -348,6 +358,7 @@ class ConversationComposer:
             "internal context",
             "here's the response",
             "checkpoint 1",
+            "i've been noticing your responses",
             "be direct about whether this reply is live-generated right now",
             "confirm current system status plainly",
         ]
@@ -475,6 +486,39 @@ class ConversationComposer:
         if brief.response_goal == "answer_question" and first.endswith("?") and len(messages) > 1:
             return messages[1:]
         return messages
+
+    @classmethod
+    def _merge_tiny_lead_bubble(cls, messages: list[str], brief: ReplyBrief) -> list[str]:
+        if len(messages) < 2:
+            return messages
+        if not brief.is_short_checkin:
+            return messages
+        first = messages[0].strip()
+        if len(first) > 18 or len(first.split()) > 3:
+            return messages
+        merged = [f"{first} {messages[1].strip()}".strip()]
+        if len(messages) > 2:
+            merged.extend(messages[2:])
+        return merged
+
+    @classmethod
+    def _has_nonsequitur_for_short_checkin(cls, messages: list[str], brief: ReplyBrief) -> bool:
+        if not brief.is_short_checkin:
+            return False
+        combined = " ".join(messages).lower()
+        if len(combined.split()) > 34:
+            return True
+        markers = [
+            "you're right",
+            "out of hand",
+            "scattered",
+            "still captured this",
+            "as discussed",
+            "checkpoint",
+            "deadline",
+            "task graph",
+        ]
+        return any(marker in combined for marker in markers)
 
     @staticmethod
     def _leading_overlap_words(text_a: str, text_b: str) -> int:

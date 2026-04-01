@@ -26,11 +26,14 @@ class ReplyBriefBuilder:
         outcome: StateOutcome,
     ) -> ReplyBrief:
         now = datetime.now(tz=ZoneInfo(user.timezone))
+        short_checkin = self._is_short_checkin_message(latest_user_message)
         recent = list_recent_messages(session, user.id, limit=16)
         recent_thread = [
             f"{'assistant' if msg.direction.value == 'outbound' else 'user'}: {msg.body[:220]}"
             for msg in recent[-10:]
         ]
+        if short_checkin:
+            recent_thread = recent_thread[-3:]
         thread_summary = " | ".join(recent_thread[-6:])
 
         active_tasks = list_active_tasks(session, user.id)[:6]
@@ -54,6 +57,9 @@ class ReplyBriefBuilder:
         context_tokens = ["task", "deadline", "due", "plan", "project", "week", "today", "tonight", "tomorrow", "hour"]
         wants_task_context = any(token in lowered_message for token in context_tokens)
         if outcome.response_goal in {"answer_question", "open_conversation", "acknowledge_context"} and not wants_task_context:
+            active_task_context = []
+            deadline_context = []
+        if short_checkin:
             active_task_context = []
             deadline_context = []
 
@@ -88,8 +94,40 @@ class ReplyBriefBuilder:
             latest_user_message=latest_user_message,
             recent_thread=recent_thread,
             operational_reason=outcome.operational_reason,
+            is_short_checkin=short_checkin,
             generated_at=now,
         )
+
+    @staticmethod
+    def _is_short_checkin_message(text: str) -> bool:
+        lowered = text.lower().strip()
+        if not lowered:
+            return False
+        words = lowered.split()
+        if len(words) > 6:
+            return False
+        if any(token in lowered for token in ["need to", "have to", "deadline", "due", "assignment", "project", "task"]):
+            return False
+        checkin_tokens = {
+            "yo",
+            "hey",
+            "hi",
+            "sup",
+            "whatup",
+            "whatsup",
+            "hello",
+            "ping",
+            "test",
+            "you",
+            "there",
+            "work",
+            "working",
+            "online",
+            "on",
+            "back",
+            "cooking",
+        }
+        return bool(set(words).intersection(checkin_tokens))
 
     @staticmethod
     def _recent_memory_notes(session: Session, user_id) -> list[str]:

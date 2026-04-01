@@ -43,6 +43,22 @@ class OllamaAdapter:
     ) -> dict[str, Any] | None:
         if not self._enabled:
             return None
+        payload_generate = {
+            "model": model or self._text_model,
+            "stream": False,
+            "format": "json",
+            "prompt": f"{system}\n\n{user}",
+        }
+        if options:
+            payload_generate["options"] = options
+        content = self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
+        if content == "__generate_404__":
+            content = None
+        if content:
+            parsed = self._parse_json(content)
+            if isinstance(parsed, dict):
+                return parsed
+
         payload_chat = {
             "model": model or self._text_model,
             "stream": False,
@@ -56,15 +72,7 @@ class OllamaAdapter:
             payload_chat["options"] = options
         content = self._chat_content(payload_chat, request_timeout_seconds=request_timeout_seconds)
         if content == "__chat_404__":
-            payload_generate = {
-                "model": model or self._text_model,
-                "stream": False,
-                "format": "json",
-                "prompt": f"{system}\n\n{user}",
-            }
-            if options:
-                payload_generate["options"] = options
-            content = self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
+            return None
         if not content:
             return None
         parsed = self._parse_json(content)
@@ -83,6 +91,17 @@ class OllamaAdapter:
     ) -> str | None:
         if not self._enabled:
             return None
+        payload_generate = {
+            "model": model or self._text_model,
+            "stream": False,
+            "prompt": f"{system}\n\n{user}",
+        }
+        if options:
+            payload_generate["options"] = options
+        content = self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
+        if content and content != "__generate_404__":
+            return content
+
         payload_chat = {
             "model": model or self._text_model,
             "stream": False,
@@ -94,18 +113,9 @@ class OllamaAdapter:
         if options:
             payload_chat["options"] = options
         content = self._chat_content(payload_chat, request_timeout_seconds=request_timeout_seconds)
-        if content and content != "__chat_404__":
-            return content
-        if content != "__chat_404__":
+        if not content or content == "__chat_404__":
             return None
-        payload_generate = {
-            "model": model or self._text_model,
-            "stream": False,
-            "prompt": f"{system}\n\n{user}",
-        }
-        if options:
-            payload_generate["options"] = options
-        return self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
+        return content
 
     def vision_json(
         self,
@@ -163,6 +173,8 @@ class OllamaAdapter:
         try:
             with httpx.Client(timeout=self._timeout_for(request_timeout_seconds)) as client:
                 response = client.post(f"{self._base_url}/api/generate", json=payload)
+                if response.status_code == 404:
+                    return "__generate_404__"
                 response.raise_for_status()
                 data = response.json()
             return data.get("response")

@@ -234,7 +234,19 @@ class StateEngine:
 
         else:
             lowered = raw_text.lower()
-            if any(token in lowered for token in ["progress", "made progress", "moving now", "locked in", "momentum"]):
+            if any(
+                token in lowered
+                for token in [
+                    "progress",
+                    "made progress",
+                    "moving now",
+                    "locked in",
+                    "momentum",
+                    "ready",
+                    "all set",
+                    "set up",
+                ]
+            ):
                 outcome.response_goal = "react_to_progress"
                 outcome.emotional_tone = "supportive"
                 next_task = self._next_task(session, user.id)

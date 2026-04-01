@@ -148,6 +148,7 @@ This repo now defaults to `LLM_PROVIDER=openai`.
 - `OPENAI_TIMEOUT_SECONDS=45`
 - `OPENAI_FALLBACK_TO_OLLAMA=true` keeps replies alive if OpenAI is rate-limited or temporarily unavailable
 - `OPENAI_RATE_LIMIT_COOLDOWN_SECONDS=300` avoids repeated OpenAI 429 retries by temporarily routing directly to Ollama fallback
+- `OPENAI_INSUFFICIENT_QUOTA_COOLDOWN_SECONDS=3600` pauses OpenAI retries longer when billing/quota is exhausted, and skips low-quality Ollama text fallback in that mode
 
 ### Ollama setup (optional, still fully supported)
 
@@ -323,6 +324,7 @@ If `LLM_PROVIDER=openai`:
 - `OPENAI_TIMEOUT_SECONDS`
 - `OPENAI_FALLBACK_TO_OLLAMA`
 - `OPENAI_RATE_LIMIT_COOLDOWN_SECONDS`
+- `OPENAI_INSUFFICIENT_QUOTA_COOLDOWN_SECONDS`
 
 If `LLM_PROVIDER=ollama`:
 - `OLLAMA_BASE_URL`

@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class OllamaAdapter:
     _shared_openai_rate_limited_until: datetime | None = None
+    _shared_openai_cooldown_reason: str | None = None
 
     def __init__(self) -> None:
         settings = get_settings()
@@ -26,7 +27,11 @@ class OllamaAdapter:
         self._openai_rate_limit_cooldown = timedelta(
             seconds=max(0, int(getattr(settings, "openai_rate_limit_cooldown_seconds", 300)))
         )
+        self._openai_insufficient_quota_cooldown = timedelta(
+            seconds=max(0, int(getattr(settings, "openai_insufficient_quota_cooldown_seconds", 3600)))
+        )
         self._openai_rate_limited_until: datetime | None = self.__class__._shared_openai_rate_limited_until
+        self._openai_cooldown_reason: str | None = self.__class__._shared_openai_cooldown_reason
         self._native_api_available: bool | None = None
         self._openai_compat_available: bool | None = None
         self._ollama_base_url = settings.ollama_base_url.rstrip("/")
@@ -81,7 +86,7 @@ class OllamaAdapter:
             return None
         if self._provider == "openai":
             if self._is_openai_in_cooldown():
-                if self._openai_fallback_to_ollama:
+                if self._openai_fallback_to_ollama and self._cooldown_allows_ollama_fallback():
                     logger.warning("openai cooldown active; using ollama json completion")
                     return self._ollama_json_completion(
                         system=system,
@@ -94,6 +99,7 @@ class OllamaAdapter:
             candidates = self._text_model_candidates(model)
             per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
             rate_limited = False
+            insufficient_quota = False
             for candidate in candidates:
                 content = self._openai_chat_completion(
                     system=system,
@@ -104,16 +110,20 @@ class OllamaAdapter:
                 )
                 if content == "__model_not_found__":
                     continue
+                if content == "__insufficient_quota__":
+                    insufficient_quota = True
+                    self._mark_openai_rate_limited(reason="insufficient_quota")
+                    break
                 if content == "__rate_limited__":
                     rate_limited = True
-                    self._mark_openai_rate_limited()
+                    self._mark_openai_rate_limited(reason="rate_limited")
                     break
                 if content:
                     parsed = self._parse_json(content)
                     if isinstance(parsed, dict):
                         self._clear_openai_rate_limit()
                         return parsed
-            if self._openai_fallback_to_ollama:
+            if self._openai_fallback_to_ollama and not insufficient_quota:
                 if rate_limited:
                     logger.warning("openai rate-limited; falling back to ollama json completion")
                 return self._ollama_json_completion(
@@ -190,7 +200,7 @@ class OllamaAdapter:
             return None
         if self._provider == "openai":
             if self._is_openai_in_cooldown():
-                if self._openai_fallback_to_ollama:
+                if self._openai_fallback_to_ollama and self._cooldown_allows_ollama_fallback():
                     logger.warning("openai cooldown active; using ollama text completion")
                     return self._ollama_text_completion(
                         system=system,
@@ -203,6 +213,7 @@ class OllamaAdapter:
             candidates = self._text_model_candidates(model)
             per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
             rate_limited = False
+            insufficient_quota = False
             for candidate in candidates:
                 content = self._openai_chat_completion(
                     system=system,
@@ -213,14 +224,18 @@ class OllamaAdapter:
                 )
                 if content == "__model_not_found__":
                     continue
+                if content == "__insufficient_quota__":
+                    insufficient_quota = True
+                    self._mark_openai_rate_limited(reason="insufficient_quota")
+                    break
                 if content == "__rate_limited__":
                     rate_limited = True
-                    self._mark_openai_rate_limited()
+                    self._mark_openai_rate_limited(reason="rate_limited")
                     break
                 if content:
                     self._clear_openai_rate_limit()
                     return content
-            if self._openai_fallback_to_ollama:
+            if self._openai_fallback_to_ollama and not insufficient_quota:
                 if rate_limited:
                     logger.warning("openai rate-limited; falling back to ollama text completion")
                 return self._ollama_text_completion(
@@ -294,13 +309,14 @@ class OllamaAdapter:
             return None
         if self._provider == "openai":
             if self._is_openai_in_cooldown():
-                if not self._openai_fallback_to_ollama:
+                if not self._openai_fallback_to_ollama or not self._cooldown_allows_ollama_fallback():
                     return None
                 logger.warning("openai cooldown active; using ollama vision completion")
             else:
                 candidates = self._text_model_candidates(self._vision_model)
                 per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
                 rate_limited = False
+                insufficient_quota = False
                 for candidate in candidates:
                     content = self._openai_chat_completion(
                         system=system,
@@ -312,16 +328,20 @@ class OllamaAdapter:
                     )
                     if content == "__model_not_found__":
                         continue
+                    if content == "__insufficient_quota__":
+                        insufficient_quota = True
+                        self._mark_openai_rate_limited(reason="insufficient_quota")
+                        break
                     if content == "__rate_limited__":
                         rate_limited = True
-                        self._mark_openai_rate_limited()
+                        self._mark_openai_rate_limited(reason="rate_limited")
                         break
                     if content:
                         parsed = self._parse_json(content)
                         if isinstance(parsed, dict):
                             self._clear_openai_rate_limit()
                             return parsed
-                if not self._openai_fallback_to_ollama:
+                if not self._openai_fallback_to_ollama or insufficient_quota:
                     return None
                 if rate_limited:
                     logger.warning("openai rate-limited; falling back to ollama vision completion")
@@ -479,6 +499,16 @@ class OllamaAdapter:
                 response = client.post(url, json=payload, headers=headers)
                 if response.status_code == 429:
                     self._openai_compat_available = True
+                    try:
+                        body = response.json() or {}
+                        err = body.get("error") if isinstance(body, dict) else None
+                        code = (err.get("code", "") if isinstance(err, dict) else "").lower()
+                        err_type = (err.get("type", "") if isinstance(err, dict) else "").lower()
+                        if code == "insufficient_quota" or err_type == "insufficient_quota":
+                            logger.warning("openai insufficient quota detected; entering cooldown window")
+                            return "__insufficient_quota__"
+                    except Exception:
+                        pass
                     return "__rate_limited__"
                 if response.status_code in (400, 404):
                     self._openai_compat_available = False
@@ -558,24 +588,37 @@ class OllamaAdapter:
             pool=3.0,
         )
 
-    def _mark_openai_rate_limited(self) -> None:
-        if self._openai_rate_limit_cooldown.total_seconds() <= 0:
+    def _mark_openai_rate_limited(self, *, reason: str = "rate_limited") -> None:
+        cooldown = self._openai_rate_limit_cooldown
+        if reason == "insufficient_quota":
+            cooldown = self._openai_insufficient_quota_cooldown
+        if cooldown.total_seconds() <= 0:
             return
-        until = datetime.now(tz=timezone.utc) + self._openai_rate_limit_cooldown
+        until = datetime.now(tz=timezone.utc) + cooldown
         self._openai_rate_limited_until = until
+        self._openai_cooldown_reason = reason
         self.__class__._shared_openai_rate_limited_until = until
+        self.__class__._shared_openai_cooldown_reason = reason
 
     def _clear_openai_rate_limit(self) -> None:
         self._openai_rate_limited_until = None
+        self._openai_cooldown_reason = None
         self.__class__._shared_openai_rate_limited_until = None
+        self.__class__._shared_openai_cooldown_reason = None
 
     def _is_openai_in_cooldown(self) -> bool:
         shared = self.__class__._shared_openai_rate_limited_until
         if shared is not None:
             self._openai_rate_limited_until = shared
+        shared_reason = self.__class__._shared_openai_cooldown_reason
+        if shared_reason is not None:
+            self._openai_cooldown_reason = shared_reason
         if not self._openai_rate_limited_until:
             return False
         return datetime.now(tz=timezone.utc) < self._openai_rate_limited_until
+
+    def _cooldown_allows_ollama_fallback(self) -> bool:
+        return (self._openai_cooldown_reason or "").lower() != "insufficient_quota"
 
     def _text_model_candidates(self, model: str | None) -> list[str]:
         primary = (model or self._text_model).strip()

@@ -7,6 +7,7 @@ from app.llm.client import OllamaAdapter
 
 def _adapter_for_test() -> OllamaAdapter:
     OllamaAdapter._shared_openai_rate_limited_until = None
+    OllamaAdapter._shared_openai_cooldown_reason = None
     adapter = object.__new__(OllamaAdapter)
     adapter._enabled = True
     adapter._provider = "ollama"
@@ -27,12 +28,15 @@ def _adapter_for_test() -> OllamaAdapter:
     adapter._ollama_default_options = {}
     adapter._timeout = None
     adapter._openai_rate_limit_cooldown = timedelta(seconds=300)
+    adapter._openai_insufficient_quota_cooldown = timedelta(seconds=3600)
     adapter._openai_rate_limited_until = None
+    adapter._openai_cooldown_reason = None
     return adapter
 
 
 def _openai_adapter_for_test() -> OllamaAdapter:
     OllamaAdapter._shared_openai_rate_limited_until = None
+    OllamaAdapter._shared_openai_cooldown_reason = None
     adapter = object.__new__(OllamaAdapter)
     adapter._enabled = True
     adapter._provider = "openai"
@@ -54,7 +58,9 @@ def _openai_adapter_for_test() -> OllamaAdapter:
     adapter._default_options = {}
     adapter._timeout = None
     adapter._openai_rate_limit_cooldown = timedelta(seconds=300)
+    adapter._openai_insufficient_quota_cooldown = timedelta(seconds=3600)
     adapter._openai_rate_limited_until = None
+    adapter._openai_cooldown_reason = None
     return adapter
 
 
@@ -275,3 +281,37 @@ def test_openai_cooldown_is_shared_across_adapter_instances():
     assert first == "ollama fallback reply"
     assert second == "ollama fallback reply"
     assert openai_calls["count"] == 1
+
+
+def test_openai_insufficient_quota_skips_ollama_fallback_and_stays_in_cooldown():
+    adapter = _openai_adapter_for_test()
+    openai_calls = {"count": 0}
+    ollama_calls = {"count": 0}
+
+    def fake_openai_chat_completion(  # noqa: ANN001
+        *,
+        system,
+        user,
+        model,
+        options=None,
+        images=None,
+        request_timeout_seconds=None,
+    ):
+        openai_calls["count"] += 1
+        return "__insufficient_quota__"
+
+    def fake_ollama_text_completion(**kwargs):  # noqa: ANN003,ANN201
+        ollama_calls["count"] += 1
+        return "ollama fallback reply"
+
+    adapter._openai_chat_completion = fake_openai_chat_completion  # type: ignore[attr-defined]
+    adapter._ollama_text_completion = fake_ollama_text_completion  # type: ignore[attr-defined]
+
+    first = adapter.text_completion(system="s", user="u")
+    second = adapter.text_completion(system="s", user="u again")
+
+    assert first is None
+    assert second is None
+    assert openai_calls["count"] == 1
+    assert ollama_calls["count"] == 0
+    assert adapter._openai_cooldown_reason == "insufficient_quota"

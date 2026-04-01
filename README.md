@@ -129,6 +129,7 @@ https://<your-domain>/webhooks/twilio
 - `TWILIO_FROM_NUMBER`
 - `TWILIO_TO_NUMBER` (your personal number for one-user mode)
 - `TWILIO_VALIDATE_SIGNATURE=false` (recommended behind reverse proxy for MVP)
+- `TWILIO_OUTBOUND_ENABLED=true` (set `false` to process inbound + AI logic without paying for outbound sends during testing)
 
 ## 6) Provider Setup (Default: OpenAI)
 
@@ -374,6 +375,7 @@ Current suite validates:
 - Incoming shows in Twilio but no outbound:
   - confirm `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` are set in `.env`
   - for reverse-proxy deployments, keep `TWILIO_VALIDATE_SIGNATURE=false`
+  - if you intentionally disabled sends for test mode, check `TWILIO_OUTBOUND_ENABLED` (set to `true` to re-enable live SMS)
   - check API logs: `docker logs -f friend-api`
 
 ## 14) Known MVP Limitations / Next Upgrades

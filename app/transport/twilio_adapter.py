@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from uuid import uuid4
 
 from twilio.base.exceptions import TwilioRestException
 from twilio.request_validator import RequestValidator
@@ -16,6 +17,7 @@ class TwilioTransport:
         settings = get_settings()
         self._settings = settings
         self._enabled = bool(settings.twilio_account_sid and settings.twilio_auth_token and settings.twilio_from_number)
+        self._outbound_enabled = bool(settings.twilio_outbound_enabled)
         self._client = (
             Client(username=settings.twilio_account_sid, password=settings.twilio_auth_token)
             if self._enabled
@@ -33,6 +35,9 @@ class TwilioTransport:
         return self._validator.validate(url, params, signature)
 
     def send_sms(self, *, to_number: str, body: str) -> str | None:
+        if not self._outbound_enabled:
+            logger.info("twilio outbound disabled, skipped send to %s: %s", to_number, body)
+            return f"SM_DRYRUN_{uuid4().hex[:20]}"
         if not self._client:
             logger.info("twilio disabled, would send to %s: %s", to_number, body)
             return None
@@ -46,4 +51,3 @@ class TwilioTransport:
         except TwilioRestException as exc:  # pragma: no cover
             logger.exception("failed to send twilio sms: %s", exc)
             return None
-

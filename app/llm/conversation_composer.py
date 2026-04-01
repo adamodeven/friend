@@ -345,19 +345,19 @@ class ConversationComposer:
         # Failure-only safety net; should not be the normal UX path.
         opening = self._fallback_opening(brief.latest_user_message)
         lowered_user = brief.latest_user_message.lower()
+        first_fact = self._first_safe_fact(brief)
         if brief.response_goal == "answer_question":
             if any(token in lowered_user for token in ("canned", "live", "generated")):
                 base = "not canned, but i'm in backup mode right now while model access is limited."
-            elif brief.key_facts_to_include:
-                base = brief.key_facts_to_include[0]
+            elif first_fact:
+                base = first_fact
             else:
                 base = "yeah, i'm live and i got your message."
         elif brief.response_goal == "timeline_summary":
             summary = brief.key_facts_to_include[0] if brief.key_facts_to_include else "no hard due items right now."
-            summary = re.sub(r"\s*\n\s*-\s*", "; ", summary).replace("\n", " ").strip()
-            base = re.sub(r"\s{2,}", " ", summary)
+            base = self._flatten_timeline_summary(summary) or "no hard due items right now."
         elif brief.response_goal == "acknowledge_new_task":
-            first_fact = brief.key_facts_to_include[0] if brief.key_facts_to_include else "task captured."
+            first_fact = first_fact or "task captured."
             if brief.should_ask_question and brief.question_if_needed:
                 base = f"locked in. {first_fact} {brief.question_if_needed}"
             elif brief.suggested_next_step:
@@ -370,14 +370,14 @@ class ConversationComposer:
             else:
                 base = "got it, blocker noted. what's the quickest next move to unblock it?"
         elif brief.response_goal == "confirm_update":
-            fact = brief.key_facts_to_include[0] if brief.key_facts_to_include else "update applied."
+            fact = first_fact or "update applied."
             base = f"got it. {fact}"
         elif brief.should_ask_question and brief.question_if_needed:
             base = f"{opening} {brief.question_if_needed}"
         elif brief.suggested_next_step:
             base = f"{opening} next move: {brief.suggested_next_step}"
-        elif brief.key_facts_to_include:
-            base = f"{opening} {brief.key_facts_to_include[0]}"
+        elif first_fact:
+            base = f"{opening} {first_fact}"
         elif brief.is_short_checkin:
             base = "yo i'm here. what's the move?"
         else:
@@ -387,6 +387,56 @@ class ConversationComposer:
             max_chunk_length=brief.max_chunk_length,
             max_chunks=min(brief.max_chunks, 2),
         )
+
+    def _first_safe_fact(self, brief: ReplyBrief) -> str | None:
+        for fact in brief.key_facts_to_include:
+            safe = self._sanitize_fallback_text(fact)
+            if safe:
+                return safe
+        return None
+
+    def _flatten_timeline_summary(self, summary: str) -> str:
+        cleaned = self._sanitize_fallback_text(summary)
+        if not cleaned:
+            return ""
+
+        lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+        if not lines:
+            return ""
+
+        heading: str | None = None
+        items: list[str] = []
+        for line in lines:
+            bullet = re.sub(r"^\s*[-*]\s*", "", line).strip()
+            if not bullet:
+                continue
+            if line.endswith(":") and not heading and len(lines) > 1:
+                heading = bullet.rstrip(":").strip().lower()
+                continue
+            items.append(bullet)
+
+        if not items:
+            return (heading + " is clear right now.") if heading else cleaned
+
+        compact_items = "; ".join(items[:3]).strip()
+        if heading:
+            return f"{heading}: {compact_items}"
+        return compact_items
+
+    @classmethod
+    def _sanitize_fallback_text(cls, text: str) -> str:
+        candidate = cls._clean_candidate_text(text or "")
+        if not candidate:
+            return ""
+        if cls._looks_hard_structured_leak(candidate):
+            return ""
+        lowered = candidate.lower()
+        if any(token in lowered for token in cls._quality_banned_openers()):
+            return ""
+        candidate = re.sub(r"\s*:\s*;\s*", ": ", candidate)
+        candidate = re.sub(r"[ \t]{2,}", " ", candidate)
+        candidate = re.sub(r"\n{3,}", "\n\n", candidate).strip()
+        return candidate
 
     @staticmethod
     def _fallback_opening(seed: str) -> str:

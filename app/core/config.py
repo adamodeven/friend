@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     twilio_to_number: str = ""
     twilio_webhook_auth_token: str = ""
     twilio_validate_signature: bool = False
+    twilio_outbound_enabled: bool = True
 
     admin_token: str = "change-me"
     default_style: str = "casual_cool"

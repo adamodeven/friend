@@ -51,6 +51,8 @@ class ConversationComposer:
             return None, False
 
         combined = " ".join(messages)
+        if self._looks_hard_structured_leak(combined):
+            return None, False
         if (
             self._looks_internal_or_robotic(combined)
             or self._looks_low_quality(combined, brief.latest_user_message)
@@ -192,7 +194,7 @@ class ConversationComposer:
         elif brief.key_facts_to_include:
             base = f"{opening} i still captured this: {brief.key_facts_to_include[0]}"
         else:
-            base = f"{opening} resend that and i got you."
+            base = f"{opening} got the update. what's the next move?"
         return self.chunker.chunk(
             base,
             max_chunk_length=brief.max_chunk_length,
@@ -240,12 +242,17 @@ class ConversationComposer:
             "recent thread",
         ]
 
+    @staticmethod
+    def _looks_hard_structured_leak(text: str) -> bool:
+        lowered = text.lower()
+        return "status=" in lowered or "[status" in lowered or "due=-" in lowered
+
     @classmethod
     def _looks_low_quality(cls, candidate: str, latest_user_message: str) -> bool:
         lowered = candidate.lower().strip()
         if any(token in lowered for token in cls._quality_banned_openers()):
             return True
-        if "status=" in lowered or "[status" in lowered or "due=-" in lowered:
+        if cls._looks_hard_structured_leak(lowered):
             return True
         if re.search(r"\bstatus\s+[a-z_]+\s+p[0-9]\b", lowered):
             return True

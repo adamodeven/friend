@@ -153,3 +153,23 @@ def test_ambiguous_time_sets_clarification_hint():
     assert result.time_reference is not None
     assert result.time_confidence <= 0.6
     assert result.needs_clarification is True
+
+
+def test_timeline_query_fallback_wins_over_bad_llm_add_task_guess():
+    payload = {
+        "intent": "add_task",
+        "confidence": 0.76,
+        "task": {
+            "title": "what do i need to get done tonight",
+            "description": None,
+            "project": None,
+            "deadline_text": None,
+            "priority": 2,
+            "confidence": 0.6,
+            "next_step": None,
+        },
+    }
+    adapter = _PayloadAdapter(payload)
+    extractor = IntentExtractor(adapter=adapter)
+    result = extractor.extract("what do i need to get done tonight", "America/New_York")
+    assert result.intent == "timeline_query"

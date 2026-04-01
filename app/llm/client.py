@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -20,6 +21,10 @@ class OllamaAdapter:
         self._keep_alive = settings.ollama_keep_alive
         self._auto_pull_missing_models = settings.ollama_auto_pull_missing_models
         self._openai_fallback_to_ollama = bool(getattr(settings, "openai_fallback_to_ollama", True))
+        self._openai_rate_limit_cooldown = timedelta(
+            seconds=max(0, int(getattr(settings, "openai_rate_limit_cooldown_seconds", 300)))
+        )
+        self._openai_rate_limited_until: datetime | None = None
         self._native_api_available: bool | None = None
         self._openai_compat_available: bool | None = None
         self._ollama_base_url = settings.ollama_base_url.rstrip("/")
@@ -73,6 +78,17 @@ class OllamaAdapter:
         if not self._enabled:
             return None
         if self._provider == "openai":
+            if self._is_openai_in_cooldown():
+                if self._openai_fallback_to_ollama:
+                    logger.warning("openai cooldown active; using ollama json completion")
+                    return self._ollama_json_completion(
+                        system=system,
+                        user=user,
+                        model=None,
+                        options=options,
+                        request_timeout_seconds=request_timeout_seconds,
+                    )
+                return None
             candidates = self._text_model_candidates(model)
             per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
             rate_limited = False
@@ -88,10 +104,12 @@ class OllamaAdapter:
                     continue
                 if content == "__rate_limited__":
                     rate_limited = True
+                    self._mark_openai_rate_limited()
                     break
                 if content:
                     parsed = self._parse_json(content)
                     if isinstance(parsed, dict):
+                        self._clear_openai_rate_limit()
                         return parsed
             if self._openai_fallback_to_ollama:
                 if rate_limited:
@@ -169,6 +187,17 @@ class OllamaAdapter:
         if not self._enabled:
             return None
         if self._provider == "openai":
+            if self._is_openai_in_cooldown():
+                if self._openai_fallback_to_ollama:
+                    logger.warning("openai cooldown active; using ollama text completion")
+                    return self._ollama_text_completion(
+                        system=system,
+                        user=user,
+                        model=None,
+                        options=options,
+                        request_timeout_seconds=request_timeout_seconds,
+                    )
+                return None
             candidates = self._text_model_candidates(model)
             per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
             rate_limited = False
@@ -184,8 +213,10 @@ class OllamaAdapter:
                     continue
                 if content == "__rate_limited__":
                     rate_limited = True
+                    self._mark_openai_rate_limited()
                     break
                 if content:
+                    self._clear_openai_rate_limit()
                     return content
             if self._openai_fallback_to_ollama:
                 if rate_limited:
@@ -260,31 +291,38 @@ class OllamaAdapter:
         if not image_b64:
             return None
         if self._provider == "openai":
-            candidates = self._text_model_candidates(self._vision_model)
-            per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
-            rate_limited = False
-            for candidate in candidates:
-                content = self._openai_chat_completion(
-                    system=system,
-                    user=user_prompt,
-                    model=candidate,
-                    options={"format": "json"},
-                    images=[image_b64],
-                    request_timeout_seconds=per_attempt_timeout,
-                )
-                if content == "__model_not_found__":
-                    continue
-                if content == "__rate_limited__":
-                    rate_limited = True
-                    break
-                if content:
-                    parsed = self._parse_json(content)
-                    if isinstance(parsed, dict):
-                        return parsed
-            if not self._openai_fallback_to_ollama:
-                return None
-            if rate_limited:
-                logger.warning("openai rate-limited; falling back to ollama vision completion")
+            if self._is_openai_in_cooldown():
+                if not self._openai_fallback_to_ollama:
+                    return None
+                logger.warning("openai cooldown active; using ollama vision completion")
+            else:
+                candidates = self._text_model_candidates(self._vision_model)
+                per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
+                rate_limited = False
+                for candidate in candidates:
+                    content = self._openai_chat_completion(
+                        system=system,
+                        user=user_prompt,
+                        model=candidate,
+                        options={"format": "json"},
+                        images=[image_b64],
+                        request_timeout_seconds=per_attempt_timeout,
+                    )
+                    if content == "__model_not_found__":
+                        continue
+                    if content == "__rate_limited__":
+                        rate_limited = True
+                        self._mark_openai_rate_limited()
+                        break
+                    if content:
+                        parsed = self._parse_json(content)
+                        if isinstance(parsed, dict):
+                            self._clear_openai_rate_limit()
+                            return parsed
+                if not self._openai_fallback_to_ollama:
+                    return None
+                if rate_limited:
+                    logger.warning("openai rate-limited; falling back to ollama vision completion")
         payload = {
             "model": self._ollama_vision_model,
             "stream": False,
@@ -517,6 +555,19 @@ class OllamaAdapter:
             write=min(8.0, total),
             pool=3.0,
         )
+
+    def _mark_openai_rate_limited(self) -> None:
+        if self._openai_rate_limit_cooldown.total_seconds() <= 0:
+            return
+        self._openai_rate_limited_until = datetime.now(tz=timezone.utc) + self._openai_rate_limit_cooldown
+
+    def _clear_openai_rate_limit(self) -> None:
+        self._openai_rate_limited_until = None
+
+    def _is_openai_in_cooldown(self) -> bool:
+        if not self._openai_rate_limited_until:
+            return False
+        return datetime.now(tz=timezone.utc) < self._openai_rate_limited_until
 
     def _text_model_candidates(self, model: str | None) -> list[str]:
         primary = (model or self._text_model).strip()

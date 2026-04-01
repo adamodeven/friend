@@ -209,9 +209,16 @@ class StateEngine:
                         outcome.question_if_needed = "what has to happen first before this can move?"
                     self.reminders.schedule_for_task(session, matched)
                 else:
-                    outcome.key_facts_to_include.append("update noted, but task match was uncertain")
-                    outcome.should_ask_question = True
-                    outcome.question_if_needed = "which task do you want updated?"
+                    if intent.blockers:
+                        outcome.response_goal = "replan_blocker"
+                        outcome.key_facts_to_include.append("blocker noted even without a specific task match")
+                        outcome.key_facts_to_include.append(f"blocker: {intent.blockers[0]}")
+                        outcome.should_ask_question = True
+                        outcome.question_if_needed = "what's the smallest next move to unblock this?"
+                    else:
+                        outcome.key_facts_to_include.append("update noted, but task match was uncertain")
+                        outcome.should_ask_question = True
+                        outcome.question_if_needed = "which task do you want updated?"
 
         elif intent.intent == "status_query":
             outcome.response_goal = "answer_question"

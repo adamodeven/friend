@@ -151,6 +151,7 @@ def send_due_reminders_task() -> dict:
         reminders = engine.due_reminders(session, user.id, now)
         sent = 0
         skipped = 0
+        max_send_per_run = 2
         recent_inbound_window_start = now - timedelta(minutes=12)
         latest_inbound = (
             session.execute(
@@ -173,6 +174,11 @@ def send_due_reminders_task() -> dict:
         for reminder in reminders:
             if recent_inbound_exists:
                 reminder.scheduled_for = now + timedelta(minutes=15)
+                skipped += 1
+                continue
+
+            if sent >= max_send_per_run:
+                reminder.scheduled_for = now + timedelta(minutes=20)
                 skipped += 1
                 continue
 

@@ -171,3 +171,23 @@ def test_timeline_query_tomorrow_morning_routes_to_specific_window(db_session):
     )
     assert outcome.response_goal == "timeline_summary"
     assert any("tomorrow morning" in fact.lower() for fact in outcome.key_facts_to_include)
+
+
+def test_update_task_with_blocker_without_task_match_routes_to_replan(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    engine = StateEngine()
+    intent = IntentResult(
+        intent="update_task",
+        confidence=0.8,
+        blockers=["need to fix website first"],
+        task_updates={"status": "blocked"},
+    )
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="i keep getting distracted because i need to fix the website first",
+    )
+    assert outcome.response_goal == "replan_blocker"
+    assert outcome.should_ask_question is True
+    assert outcome.question_if_needed is not None

@@ -343,14 +343,40 @@ class ConversationComposer:
     def _fallback_messages(self, brief: ReplyBrief) -> list[str]:
         # Failure-only safety net; should not be the normal UX path.
         opening = self._fallback_opening(brief.latest_user_message)
-        if brief.response_goal == "answer_question" and brief.key_facts_to_include:
-            base = brief.key_facts_to_include[0]
+        lowered_user = brief.latest_user_message.lower()
+        if brief.response_goal == "answer_question":
+            if any(token in lowered_user for token in ("canned", "live", "generated")):
+                base = "live-generated right now, not canned."
+            elif brief.key_facts_to_include:
+                base = brief.key_facts_to_include[0]
+            else:
+                base = "yeah, i'm live and i got your message."
+        elif brief.response_goal == "timeline_summary":
+            base = brief.key_facts_to_include[0] if brief.key_facts_to_include else "no hard due items right now."
+        elif brief.response_goal == "acknowledge_new_task":
+            first_fact = brief.key_facts_to_include[0] if brief.key_facts_to_include else "task captured."
+            if brief.should_ask_question and brief.question_if_needed:
+                base = f"locked in. {first_fact} {brief.question_if_needed}"
+            elif brief.suggested_next_step:
+                base = f"locked in. {first_fact} next move: {brief.suggested_next_step}"
+            else:
+                base = f"locked in. {first_fact}"
+        elif brief.response_goal == "replan_blocker":
+            if brief.question_if_needed:
+                base = f"got it, blocker noted. {brief.question_if_needed}"
+            else:
+                base = "got it, blocker noted. what's the quickest next move to unblock it?"
+        elif brief.response_goal == "confirm_update":
+            fact = brief.key_facts_to_include[0] if brief.key_facts_to_include else "update applied."
+            base = f"got it. {fact}"
         elif brief.should_ask_question and brief.question_if_needed:
             base = f"{opening} {brief.question_if_needed}"
         elif brief.suggested_next_step:
             base = f"{opening} next move: {brief.suggested_next_step}"
         elif brief.key_facts_to_include:
             base = f"{opening} {brief.key_facts_to_include[0]}"
+        elif brief.is_short_checkin:
+            base = "yo i'm here. what's the move?"
         else:
             base = f"{opening} got the update. what's the next move?"
         return self.chunker.chunk(
@@ -434,6 +460,10 @@ class ConversationComposer:
             "internal:",
             "task_manager:",
             "response_goal",
+            "confirm update",
+            "timeline summary",
+            "answer question",
+            "open conversation",
             "tiny compose hiccup",
             "generation miss",
             "response engine glitched",
@@ -505,6 +535,8 @@ class ConversationComposer:
         if "|" in candidate:
             return True
         if "actual response from me" in lowered:
+            return True
+        if "canned template" in lowered:
             return True
         if lowered.count("next move:") > 1:
             return True
@@ -590,6 +622,8 @@ class ConversationComposer:
             return True
         direct_markers = ("yes", "yeah", "yep", "no", "nah", "live", "canned", "not canned")
         if not any(marker in lowered for marker in direct_markers):
+            return True
+        if "live response canned template" in lowered or "canned template" in lowered:
             return True
         return False
 

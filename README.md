@@ -147,6 +147,7 @@ This repo now defaults to `LLM_PROVIDER=openai`.
   - `OPENAI_VISION_MODEL=gpt-5.4-mini`
 - `OPENAI_TIMEOUT_SECONDS=45`
 - `OPENAI_FALLBACK_TO_OLLAMA=true` keeps replies alive if OpenAI is rate-limited or temporarily unavailable
+- `OPENAI_RATE_LIMIT_COOLDOWN_SECONDS=300` avoids repeated OpenAI 429 retries by temporarily routing directly to Ollama fallback
 
 ### Ollama setup (optional, still fully supported)
 
@@ -320,6 +321,8 @@ If `LLM_PROVIDER=openai`:
 - `OPENAI_FALLBACK_TEXT_MODEL`
 - `OPENAI_VISION_MODEL`
 - `OPENAI_TIMEOUT_SECONDS`
+- `OPENAI_FALLBACK_TO_OLLAMA`
+- `OPENAI_RATE_LIMIT_COOLDOWN_SECONDS`
 
 If `LLM_PROVIDER=ollama`:
 - `OLLAMA_BASE_URL`

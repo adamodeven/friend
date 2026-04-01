@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from app.llm.client import OllamaAdapter
 
 
@@ -23,6 +25,8 @@ def _adapter_for_test() -> OllamaAdapter:
     adapter._default_options = {}
     adapter._ollama_default_options = {}
     adapter._timeout = None
+    adapter._openai_rate_limit_cooldown = timedelta(seconds=300)
+    adapter._openai_rate_limited_until = None
     return adapter
 
 
@@ -47,6 +51,8 @@ def _openai_adapter_for_test() -> OllamaAdapter:
     adapter._ollama_default_options = {}
     adapter._default_options = {}
     adapter._timeout = None
+    adapter._openai_rate_limit_cooldown = timedelta(seconds=300)
+    adapter._openai_rate_limited_until = None
     return adapter
 
 
@@ -206,3 +212,32 @@ def test_openai_provider_falls_back_to_ollama_when_rate_limited():
 
     result = adapter.text_completion(system="s", user="u", request_timeout_seconds=20)
     assert result == "ollama fallback reply"
+
+
+def test_openai_rate_limit_sets_cooldown_and_skips_openai_next_call():
+    adapter = _openai_adapter_for_test()
+    openai_calls = {"count": 0}
+
+    def fake_openai_chat_completion(  # noqa: ANN001
+        *,
+        system,
+        user,
+        model,
+        options=None,
+        images=None,
+        request_timeout_seconds=None,
+    ):
+        openai_calls["count"] += 1
+        return "__rate_limited__"
+
+    def fake_ollama_text_completion(**kwargs):  # noqa: ANN003,ANN201
+        return "ollama fallback reply"
+
+    adapter._openai_chat_completion = fake_openai_chat_completion  # type: ignore[attr-defined]
+    adapter._ollama_text_completion = fake_ollama_text_completion  # type: ignore[attr-defined]
+
+    first = adapter.text_completion(system="s", user="u")
+    second = adapter.text_completion(system="s", user="u again")
+    assert first == "ollama fallback reply"
+    assert second == "ollama fallback reply"
+    assert openai_calls["count"] == 1

@@ -108,6 +108,17 @@ def test_fallback_only_on_forced_model_failure():
     assert reply.messages
 
 
+def test_fallback_answer_question_handles_live_vs_canned_cleanly():
+    adapter = FakeAdapter([], enabled=False)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_answer_brief("are these canned responses or live ai generated?"))
+    assert reply.used_fallback is True
+    assert reply.messages
+    lowered = " ".join(reply.messages).lower()
+    assert "live-generated" in lowered
+    assert "not canned" in lowered
+
+
 def test_repetition_guard_triggers_regeneration():
     adapter = FakeAdapter(
         [

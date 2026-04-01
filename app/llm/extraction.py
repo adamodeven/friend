@@ -104,6 +104,8 @@ class IntentExtractor:
         ]
         looks_timeline_query = any(token in lowered for token in timeline_query_cues)
         looks_add_task = any(token in lowered for token in ["need to", "have to", "gotta", "assignment"])
+        if looks_timeline_query and ("?" in lowered or lowered.startswith("what do i") or lowered.startswith("what's due")):
+            looks_add_task = False
         if " due " in f" {lowered} " and not looks_timeline_query:
             looks_add_task = True
 
@@ -215,6 +217,16 @@ class IntentExtractor:
             return True
         if llm_result.intent == "general_chat" and fallback.intent in {"add_task", "timeline_query", "context_signal"} and fallback.confidence >= 0.78:
             return True
+        if (
+            fallback.intent == "timeline_query"
+            and fallback.confidence >= 0.8
+            and llm_result.intent == "add_task"
+            and llm_result.task is not None
+            and llm_result.task.deadline_at is None
+        ):
+            title = (llm_result.task.title or "").lower()
+            if any(token in title for token in ("what do i", "get done", "what's due", "due this week", "tonight", "tomorrow")):
+                return True
         if llm_result.intent == "add_task" and not llm_result.task and fallback.task is not None:
             return True
         return False

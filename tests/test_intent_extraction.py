@@ -37,3 +37,16 @@ def test_extract_live_status_check_as_status_query():
     extractor = IntentExtractor()
     result = extractor.extract("are you actually live now?", "America/New_York")
     assert result.intent == "status_query"
+
+
+def test_fallback_task_title_removes_temporal_prefix_noise():
+    extractor = IntentExtractor()
+    result = extractor.extract(
+        "and then tmr morning I need to submit my scout job application",
+        "America/New_York",
+    )
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert "tmr" not in result.task.title.lower()
+    assert "tomorrow" not in result.task.title.lower()
+    assert "submit" in result.task.title.lower()

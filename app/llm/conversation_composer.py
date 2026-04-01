@@ -104,7 +104,7 @@ class ConversationComposer:
         payload = self._model_payload(brief=brief, avoid_phrases=avoid_phrases, lightweight=lightweight)
         options = {
             "temperature": 0.58 if not strict else 0.42,
-            "num_predict": 22 if lightweight else 52,
+            "num_predict": 40 if lightweight else 52,
             "num_ctx": 384 if lightweight else 640,
             "repeat_penalty": 1.15,
         }
@@ -340,6 +340,7 @@ class ConversationComposer:
             "tiny compose hiccup",
             "generation miss",
             "response engine glitched",
+            "you said \"",
             "active tasks:",
             "upcoming deadlines:",
             "key facts",
@@ -379,6 +380,22 @@ class ConversationComposer:
         if "due negative" in lowered:
             return True
         if "user asked:" in lowered:
+            return True
+        tail_word = lowered.rstrip(" .!?").split(" ")[-1] if lowered else ""
+        if not re.search(r"[.!?]['\"]?$", candidate.strip()) and tail_word in {
+            "at",
+            "to",
+            "on",
+            "for",
+            "with",
+            "and",
+            "or",
+            "but",
+            "of",
+            "the",
+            "a",
+            "an",
+        }:
             return True
 
         cand_norm = cls._normalize_text(candidate)

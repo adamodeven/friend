@@ -230,6 +230,13 @@ class StateEngine:
 
     @staticmethod
     def _default_next_step(task_title: str) -> str:
+        lowered = task_title.lower()
+        if "submit" in lowered:
+            return f"do a final proofread, then submit {task_title}"
+        if "send" in lowered or "email" in lowered:
+            return f"send {task_title}"
+        if "finish" in lowered:
+            return f"finish the first complete pass on {task_title}"
         return f"start a 20-min first pass on {task_title}"
 
     @staticmethod

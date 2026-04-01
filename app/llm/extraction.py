@@ -29,7 +29,8 @@ class IntentExtractor:
             system=(
                 "Classify intent and extract task/deadline fields from a single SMS message. "
                 "Return JSON keys: intent, confidence, needs_clarification, clarification_question, "
-                "time_reference, time_confidence, context_signal, blockers, summary, task."
+                "time_reference, time_confidence, context_signal, blockers, summary, task. "
+                "task.title must be concise and should not include time phrases like tonight/tomorrow/by eod."
             ),
             user=(
                 f"timezone={timezone}\n"
@@ -125,6 +126,12 @@ class IntentExtractor:
     def _simple_task_title(text: str) -> str:
         cleaned = re.sub(r"^(yo|hey|ok|okay)\s+", "", text).strip()
         cleaned = cleaned.replace("need to ", "").replace("have to ", "")
+        cleaned = re.sub(
+            r"\b(and then|then|tmr morning|tomorrow morning|tomorrow night|tonight|this weekend|by eod|eod)\b",
+            "",
+            cleaned,
+        )
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.-")
         if len(cleaned) > 90:
             cleaned = cleaned[:90].rsplit(" ", 1)[0]
         return cleaned.capitalize()

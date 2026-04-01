@@ -36,12 +36,16 @@ async def twilio_webhook(
 
     payload = InboundSmsPayload.from_twilio_form(data)
     sid = payload.message_sid or "unknown"
+    body_preview = (payload.body or "").replace("\n", " ").strip()
+    if len(body_preview) > 160:
+        body_preview = f"{body_preview[:157]}..."
     logger.info(
-        "twilio inbound accepted sid=%s from=%s to=%s num_media=%s",
+        "twilio inbound accepted sid=%s from=%s to=%s num_media=%s body=%s",
         sid,
         payload.from_number,
         payload.to_number,
         payload.num_media,
+        body_preview,
     )
     payload_json = payload.model_dump(mode="json", by_alias=True)
     try:

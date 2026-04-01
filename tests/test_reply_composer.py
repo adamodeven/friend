@@ -144,6 +144,15 @@ def test_composer_repairs_when_output_uses_markdown_scaffolding():
     assert "checkpoint 1" not in lowered
 
 
+def test_composer_repairs_when_output_is_truncated_tail():
+    adapter = FakeAdapter(["hey, i see where you're at and it's just one thing at"], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("no it's just one thing in the morning"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    assert not " ".join(reply.messages).lower().rstrip().endswith(" at")
+
+
 def test_composer_repairs_when_output_leaks_instructional_phrase():
     adapter = FakeAdapter(["be direct about whether this reply is live-generated right now"], enabled=True)
     composer = ConversationComposer(adapter=adapter)

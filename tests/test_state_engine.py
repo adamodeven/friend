@@ -92,3 +92,4 @@ def test_single_add_task_does_not_force_checkpoint_question(db_session):
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_ask_question is False
     assert outcome.question_if_needed is None
+    assert "final proofread" in (outcome.suggested_next_step or "").lower()

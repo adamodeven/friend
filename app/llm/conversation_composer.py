@@ -31,6 +31,7 @@ class ConversationComposer:
                 max_chunk_length=brief.max_chunk_length,
                 max_chunks=brief.max_chunks,
             )
+            normalized = self._postprocess_messages(normalized, brief)
             return ComposedReply(messages=normalized, used_fallback=False, regenerated_for_repetition=regenerated)
 
         fallback = self._fallback_messages(brief)
@@ -252,3 +253,15 @@ class ConversationComposer:
             return False
         first = messages[0].strip()
         return first.endswith("?")
+
+    @classmethod
+    def _postprocess_messages(cls, messages: list[str], brief: ReplyBrief) -> list[str]:
+        if brief.response_goal != "answer_question" or not messages:
+            return messages
+        first = messages[0].strip()
+        user_norm = cls._normalize_text(brief.latest_user_message)
+        first_norm = cls._normalize_text(first)
+        if first.endswith("?") or (user_norm and first_norm and SequenceMatcher(a=first_norm, b=user_norm).ratio() >= 0.9):
+            if len(messages) > 1:
+                return messages[1:]
+        return messages

@@ -174,3 +174,18 @@ def test_composer_regenerates_if_answer_goal_starts_with_question():
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
     assert not reply.messages[0].strip().endswith("?")
+
+
+def test_answer_postprocess_drops_leading_question_if_still_present():
+    adapter = FakeAdapter(
+        [
+            "are you actually live now?\n\nI'm live right now. I received your message.",
+            "are you actually live now?\n\nI'm live right now. I received your message.",
+        ],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_answer_brief("are you actually live now?"))
+    assert reply.used_fallback is False
+    assert reply.messages[0].lower().startswith("i'm live right now")
+    assert not reply.messages[0].strip().endswith("?")

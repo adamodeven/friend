@@ -21,8 +21,9 @@ class ReminderEngine:
             return None
 
         next_time = self._next_checkin_time(session=session, task=task, now=now)
-        if self._is_in_block(session, task.user_id, next_time):
-            next_time += timedelta(minutes=45)
+        active_block_end = self._active_block_end(session, task.user_id, next_time)
+        if active_block_end:
+            next_time = max(next_time, active_block_end + timedelta(minutes=10))
 
         spacing_start = next_time - timedelta(minutes=self.settings.reminder_min_spacing_minutes)
         spacing_end = next_time + timedelta(minutes=self.settings.reminder_min_spacing_minutes)
@@ -68,12 +69,13 @@ class ReminderEngine:
 
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         day_end = now.replace(hour=23, minute=59, second=59, microsecond=0)
-        if self.daily_reminder_count(session, task.user_id, day_start, day_end) >= 10:
+        if self.daily_reminder_count(session, task.user_id, day_start, day_end) >= self.settings.reminder_max_per_day:
             spacing += timedelta(minutes=20)
 
         scheduled = now + spacing
 
-        hour = scheduled.astimezone(ZoneInfo(self.settings.timezone)).hour
+        local_tz = ZoneInfo(task.user.timezone if task.user else self.settings.timezone)
+        hour = scheduled.astimezone(local_tz).hour
         if self.settings.sleepy_hours_start <= hour < self.settings.sleepy_hours_end:
             scheduled = scheduled + timedelta(hours=(self.settings.sleepy_hours_end - hour))
         return scheduled
@@ -109,13 +111,19 @@ class ReminderEngine:
         return value
 
     @staticmethod
-    def _is_in_block(session: Session, user_id, candidate_time: datetime) -> bool:
-        stmt = select(ScheduleBlock.id).where(
+    def _active_block_end(session: Session, user_id, candidate_time: datetime) -> datetime | None:
+        stmt = select(ScheduleBlock).where(
             ScheduleBlock.user_id == user_id,
             ScheduleBlock.starts_at <= candidate_time,
             ScheduleBlock.ends_at >= candidate_time,
         )
-        return session.execute(stmt).first() is not None
+        block = session.execute(stmt).scalars().first()
+        if not block:
+            return None
+        ends_at = block.ends_at
+        if ends_at.tzinfo is None and candidate_time.tzinfo is not None:
+            return ends_at.replace(tzinfo=candidate_time.tzinfo)
+        return ends_at
 
     def due_reminders(self, session: Session, user_id, now: datetime) -> list[Reminder]:
         stmt = (

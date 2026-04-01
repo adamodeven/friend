@@ -25,9 +25,11 @@ class ConversationComposer:
         self.repetition_guard = repetition_guard or RepetitionGuard()
         provider = settings.llm_provider.lower().strip()
         if provider == "openai":
-            self._compose_model = settings.openai_composer_model.strip() or None
+            self._compose_model = settings.openai_composer_model.strip() or settings.openai_text_model.strip() or None
+            self._lightweight_compose_model = settings.openai_text_model.strip() or self._compose_model
         else:
-            self._compose_model = settings.ollama_composer_model.strip() or None
+            self._compose_model = settings.ollama_composer_model.strip() or settings.ollama_text_model.strip() or None
+            self._lightweight_compose_model = settings.ollama_text_model.strip() or self._compose_model
 
     def compose(self, brief: ReplyBrief) -> ComposedReply:
         recent_assistant = [line.split(":", 1)[1].strip() for line in brief.recent_thread if line.startswith("assistant:")]
@@ -142,7 +144,7 @@ class ConversationComposer:
         text = self.adapter.text_completion(
             system=self._system_prompt(strict=strict),
             user=payload,
-            model=self._compose_model,
+            model=self._select_model(lightweight=lightweight),
             options=options,
             request_timeout_seconds=14 if lightweight else 22,
         )
@@ -172,7 +174,7 @@ class ConversationComposer:
         result = self.adapter.json_completion(
             system=self._structured_system_prompt(strict=strict),
             user=payload,
-            model=self._compose_model,
+            model=self._select_model(lightweight=lightweight),
             options=options,
             request_timeout_seconds=16 if lightweight else 24,
         )
@@ -329,11 +331,14 @@ class ConversationComposer:
     def _extract_messages_from_text(text: str | None) -> list[str] | None:
         if not text or not text.strip():
             return None
-        blocks = [b.strip() for b in text.strip().split("\n\n") if b.strip()]
+        cleaned_text = ConversationComposer._clean_candidate_text(text)
+        if not cleaned_text:
+            return None
+        blocks = [b.strip() for b in cleaned_text.split("\n\n") if b.strip()]
         if blocks:
             return blocks
-        lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
-        return lines or [text.strip()]
+        lines = [line.strip() for line in cleaned_text.splitlines() if line.strip()]
+        return lines or [cleaned_text.strip()]
 
     def _fallback_messages(self, brief: ReplyBrief) -> list[str]:
         # Failure-only safety net; should not be the normal UX path.
@@ -592,8 +597,9 @@ class ConversationComposer:
     def _postprocess_messages(cls, messages: list[str], brief: ReplyBrief) -> list[str]:
         if not messages:
             return messages
-        messages = [cls._strip_wrapping_quotes(m) for m in messages]
+        messages = [cls._strip_wrapping_quotes(cls._clean_candidate_text(m)) for m in messages]
         messages = cls._drop_scaffolding_preface(messages)
+        messages = [m for m in messages if m and not cls._is_scaffolding_preface(m) and not cls._looks_hard_structured_leak(m)]
         if not messages:
             return messages
         first = messages[0].strip()
@@ -634,6 +640,28 @@ class ConversationComposer:
         if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {'"', "'"}:
             return stripped[1:-1].strip()
         return stripped
+
+    @staticmethod
+    def _clean_candidate_text(text: str) -> str:
+        cleaned_lines: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                cleaned_lines.append("")
+                continue
+            stripped = re.sub(r"^(assistant|outbound|reply|response)\s*:\s*", "", stripped, flags=re.IGNORECASE)
+            stripped = re.sub(r"^here(?:'|’)s the response:?\s*$", "", stripped, flags=re.IGNORECASE)
+            stripped = re.sub(r"^here is the actual response from me:?\s*$", "", stripped, flags=re.IGNORECASE)
+            if stripped:
+                cleaned_lines.append(stripped)
+        collapsed = "\n".join(cleaned_lines).strip()
+        collapsed = re.sub(r"\n{3,}", "\n\n", collapsed)
+        return collapsed
+
+    def _select_model(self, *, lightweight: bool) -> str | None:
+        if lightweight and self._lightweight_compose_model:
+            return self._lightweight_compose_model
+        return self._compose_model
 
     @classmethod
     def _merge_tiny_lead_bubble(cls, messages: list[str], brief: ReplyBrief) -> list[str]:

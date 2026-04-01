@@ -39,6 +39,9 @@ class MessageChunker:
         cleaned = [self._normalize(m) for m in messages if self._normalize(m)]
         if not cleaned:
             return []
+        if len(cleaned) >= 2 and (len(cleaned[0]) <= 10 or len(cleaned[0].split()) <= 2):
+            merged = f"{cleaned[0]} {cleaned[1]}".strip()
+            cleaned = [merged, *cleaned[2:]]
         if len(cleaned) <= max_chunks and all(len(m) <= max_chunk_length for m in cleaned):
             return cleaned
         return self.chunk(" ".join(cleaned), max_chunk_length=max_chunk_length, max_chunks=max_chunks)

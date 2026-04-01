@@ -69,4 +69,4 @@ def test_inbound_task_persists_messages_when_processing_fails(tmp_path: Path, mo
     verify.close()
 
     assert any(m.direction == MessageDirection.inbound and m.external_id == "SM_IN_TEST_1" for m in messages)
-    assert any(m.direction == MessageDirection.outbound and "processing hiccup" in m.body for m in messages)
+    assert any(m.direction == MessageDirection.outbound and "processing miss" in m.body for m in messages)

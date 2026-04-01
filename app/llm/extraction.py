@@ -21,6 +21,8 @@ class IntentExtractor:
 
     def extract(self, text: str, timezone: str) -> IntentResult:
         fallback = self._extract_fallback(text, timezone)
+        if self._should_short_circuit_to_fallback(text=text, fallback=fallback):
+            return fallback
 
         llm_result = self._extract_with_llm(text, timezone)
         if llm_result:
@@ -79,7 +81,27 @@ class IntentExtractor:
 
     def _extract_fallback(self, text: str, timezone: str) -> IntentResult:
         lowered = text.lower().strip()
-        timeline_query_cues = ["what do i have", "what's due", "deadlines", "today", "this week", "tonight", "tomorrow morning", "next hour"]
+        bulk_action = self._detect_bulk_action(lowered)
+        if bulk_action:
+            return IntentResult(
+                intent="update_task",
+                confidence=0.95,
+                summary="bulk task list action requested",
+                task_updates={"bulk_action": bulk_action},
+            )
+        timeline_query_cues = [
+            "what do i have",
+            "what's due",
+            "what do i need to get done",
+            "deadlines",
+            "today",
+            "this week",
+            "tonight",
+            "tomorrow morning",
+            "this weekend",
+            "weekend",
+            "next hour",
+        ]
         looks_timeline_query = any(token in lowered for token in timeline_query_cues)
         looks_add_task = any(token in lowered for token in ["need to", "have to", "gotta", "assignment"])
         if " due " in f" {lowered} " and not looks_timeline_query:
@@ -303,6 +325,54 @@ class IntentExtractor:
         if re.search(r"\bare you\b.*\b(live|working|online|on)\b", text):
             return True
         return "what do you do" in text or "what can you do" in text
+
+    def _should_short_circuit_to_fallback(self, *, text: str, fallback: IntentResult) -> bool:
+        if not bool(getattr(self.adapter, "enabled", True)):
+            return True
+
+        lowered = text.lower().strip()
+        if fallback.intent in {"context_signal", "timeline_query", "status_query"} and fallback.confidence >= 0.82:
+            return True
+        if fallback.intent == "general_chat" and fallback.confidence >= 0.55 and self._is_simple_checkin(lowered):
+            return True
+        return False
+
+    @staticmethod
+    def _is_simple_checkin(text: str) -> bool:
+        words = re.findall(r"[a-z0-9']+", text)
+        if len(words) > 5:
+            return False
+        if any(token.isdigit() for token in words):
+            return False
+        checkin_words = {
+            "yo",
+            "hey",
+            "hi",
+            "sup",
+            "whatup",
+            "whatsup",
+            "hello",
+            "alive",
+            "working",
+            "online",
+            "there",
+            "bro",
+            "bruh",
+            "cookin",
+            "cooking",
+        }
+        return bool(words) and all(word in checkin_words for word in words)
+
+    @staticmethod
+    def _detect_bulk_action(text: str) -> str | None:
+        patterns = (
+            r"\b(clear|reset|wipe)\b.*\b(all\s+)?(tasks|todo|to-do)\b",
+            r"\b(clean\s+slate)\b",
+        )
+        for pattern in patterns:
+            if re.search(pattern, text):
+                return "clear_active_tasks"
+        return None
 
 
 class ImageAssignmentExtractor:

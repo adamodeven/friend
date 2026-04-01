@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.time_utils import parse_human_time, time_window_for_context
-from app.db.models import DeadlineEvent, PlanningNote, Project, ScheduleBlock, Task, TaskStatus, UserProfile
+from app.db.models import DeadlineEvent, PlanningNote, Project, Reminder, ReminderStatus, ScheduleBlock, Task, TaskStatus, UserProfile
 from app.db.repositories.task_repo import create_task, find_active_task_by_title, list_active_tasks, mark_task_complete
 from app.domain.reminder_engine import ReminderEngine
 from app.domain.timeline_service import TimelineService
@@ -123,6 +123,15 @@ class StateEngine:
             if "week" in lowered:
                 summary = self.timeline.build_week_view(session, user.id, user.timezone)
                 outcome.key_facts_to_include.append(summary)
+            elif "weekend" in lowered:
+                summary = self.timeline.build_weekend_view(session, user.id, user.timezone)
+                outcome.key_facts_to_include.append(summary)
+            elif "tomorrow morning" in lowered:
+                summary = self.timeline.build_tomorrow_morning_view(session, user.id, user.timezone)
+                outcome.key_facts_to_include.append(summary)
+            elif "tonight" in lowered:
+                summary = self.timeline.build_tonight_view(session, user.id, user.timezone)
+                outcome.key_facts_to_include.append(summary)
             elif "next hour" in lowered:
                 move = self.timeline.next_hour_recommendation(session, user.id, user.timezone)
                 outcome.key_facts_to_include.append(move)
@@ -166,32 +175,43 @@ class StateEngine:
             outcome.question_if_needed = "what's the smallest next move that would unstick this?"
 
         elif intent.intent == "update_task":
-            matched = self._match_task_from_text(session, user.id, raw_text)
-            outcome.response_goal = "confirm_update"
-            outcome.emotional_tone = "direct"
-            if matched:
-                if intent.time_reference:
-                    parsed, conf = parse_human_time(intent.time_reference, timezone=user.timezone)
-                    if parsed:
-                        matched.deadline_at = parsed
-                        matched.extraction_confidence = max(matched.extraction_confidence, conf)
-                        outcome.key_facts_to_include.append(
-                            f"deadline updated for {matched.title} -> {parsed.astimezone(ZoneInfo(user.timezone)).strftime('%a %-m/%-d %-I:%M%p').lower()}"
-                        )
-                        outcome.mention_deadline = True
-                if intent.task_updates.get("status") == "blocked":
-                    matched.status = TaskStatus.blocked
-                    matched.blocked_reason = ", ".join(intent.blockers) if intent.blockers else raw_text
-                    outcome.key_facts_to_include.append(f"task blocked: {matched.title}")
-                    outcome.mention_dependency = True
-                    outcome.response_goal = "replan_blocker"
-                    outcome.should_ask_question = True
-                    outcome.question_if_needed = "what has to happen first before this can move?"
-                self.reminders.schedule_for_task(session, matched)
+            bulk_action = str(intent.task_updates.get("bulk_action", "")).strip().lower()
+            if bulk_action == "clear_active_tasks":
+                archived_count = self._clear_active_tasks(session, user.id)
+                outcome.response_goal = "confirm_update"
+                outcome.emotional_tone = "direct"
+                outcome.key_facts_to_include.append(f"cleared active task list ({archived_count} archived)")
+                outcome.should_push_for_action = archived_count == 0
+                if archived_count == 0:
+                    outcome.suggested_next_step = "drop the next task you want tracked"
+                outcome.should_ask_question = False
             else:
-                outcome.key_facts_to_include.append("update noted, but task match was uncertain")
-                outcome.should_ask_question = True
-                outcome.question_if_needed = "which task do you want updated?"
+                matched = self._match_task_from_text(session, user.id, raw_text)
+                outcome.response_goal = "confirm_update"
+                outcome.emotional_tone = "direct"
+                if matched:
+                    if intent.time_reference:
+                        parsed, conf = parse_human_time(intent.time_reference, timezone=user.timezone)
+                        if parsed:
+                            matched.deadline_at = parsed
+                            matched.extraction_confidence = max(matched.extraction_confidence, conf)
+                            outcome.key_facts_to_include.append(
+                                f"deadline updated for {matched.title} -> {parsed.astimezone(ZoneInfo(user.timezone)).strftime('%a %-m/%-d %-I:%M%p').lower()}"
+                            )
+                            outcome.mention_deadline = True
+                    if intent.task_updates.get("status") == "blocked":
+                        matched.status = TaskStatus.blocked
+                        matched.blocked_reason = ", ".join(intent.blockers) if intent.blockers else raw_text
+                        outcome.key_facts_to_include.append(f"task blocked: {matched.title}")
+                        outcome.mention_dependency = True
+                        outcome.response_goal = "replan_blocker"
+                        outcome.should_ask_question = True
+                        outcome.question_if_needed = "what has to happen first before this can move?"
+                    self.reminders.schedule_for_task(session, matched)
+                else:
+                    outcome.key_facts_to_include.append("update noted, but task match was uncertain")
+                    outcome.should_ask_question = True
+                    outcome.question_if_needed = "which task do you want updated?"
 
         elif intent.intent == "status_query":
             outcome.response_goal = "answer_question"
@@ -223,6 +243,25 @@ class StateEngine:
 
         self._update_profile_memory(session, user.id, raw_text)
         return outcome
+
+    @staticmethod
+    def _clear_active_tasks(session: Session, user_id) -> int:
+        tasks = list_active_tasks(session, user_id)
+        for task in tasks:
+            task.status = TaskStatus.archived
+
+        if tasks:
+            task_ids = [task.id for task in tasks]
+            reminder_stmt = select(Reminder).where(
+                Reminder.user_id == user_id,
+                Reminder.status == ReminderStatus.pending,
+                Reminder.task_id.in_(task_ids),
+            )
+            reminders = list(session.execute(reminder_stmt).scalars().all())
+            for reminder in reminders:
+                reminder.status = ReminderStatus.skipped
+                reminder.last_error = "skipped due to bulk clear action"
+        return len(tasks)
 
     @staticmethod
     def _normalize_context_type(text: str) -> str:

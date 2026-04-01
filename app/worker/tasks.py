@@ -9,7 +9,7 @@ from billiard.exceptions import SoftTimeLimitExceeded
 from celery import shared_task
 from sqlalchemy import select
 
-from app.db.models import DailySummarySnapshot, MessageDirection, ReminderStatus, Task, TaskStatus
+from app.db.models import ConversationMessage, DailySummarySnapshot, MessageDirection, ReminderStatus, Task, TaskStatus
 from app.db.repositories.message_repo import create_message, inbound_message_exists
 from app.db.repositories.task_repo import list_active_tasks
 from app.db.repositories.user_repo import get_or_create_primary_user, get_user_by_phone
@@ -48,7 +48,7 @@ def process_inbound_sms_task(payload_data: dict[str, Any]) -> dict[str, Any]:
     except SoftTimeLimitExceeded as exc:  # pragma: no cover
         session.rollback()
         logger.exception("inbound sms task timed out for sid=%s: %s", payload.message_sid, exc)
-        fallback_body = "quick heads up: response took too long on my side. i still logged this, resend and i got you."
+        fallback_body = "i got your text and logged it. tiny lag on my side, but keep going and i'll sync right after."
         try:
             user = get_user_by_phone(session, payload.from_number) or get_or_create_primary_user(session)
             if not inbound_message_exists(session, payload.message_sid):
@@ -82,7 +82,7 @@ def process_inbound_sms_task(payload_data: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover
         session.rollback()
         logger.exception("inbound sms task failed for sid=%s: %s", payload.message_sid, exc)
-        fallback_body = "my bad, i hit a processing hiccup. resend that and i got you."
+        fallback_body = "i got this and logged it. quick processing miss on my side, keep texting and i'll catch up."
         try:
             user = get_user_by_phone(session, payload.from_number) or get_or_create_primary_user(session)
             if not inbound_message_exists(session, payload.message_sid):
@@ -151,8 +151,31 @@ def send_due_reminders_task() -> dict:
         reminders = engine.due_reminders(session, user.id, now)
         sent = 0
         skipped = 0
+        recent_inbound_window_start = now - timedelta(minutes=12)
+        latest_inbound = (
+            session.execute(
+                select(ConversationMessage.created_at)
+                .where(
+                    ConversationMessage.user_id == user.id,
+                    ConversationMessage.direction == MessageDirection.inbound,
+                )
+                .order_by(ConversationMessage.created_at.desc())
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+        recent_inbound_exists = False
+        if latest_inbound is not None:
+            inbound_at = _ensure_datetime_tz(latest_inbound, now.tzinfo)
+            recent_inbound_exists = inbound_at >= recent_inbound_window_start
 
         for reminder in reminders:
+            if recent_inbound_exists:
+                reminder.scheduled_for = now + timedelta(minutes=15)
+                skipped += 1
+                continue
+
             task = None
             if reminder.task_id:
                 task = session.execute(select(Task).where(Task.id == reminder.task_id)).scalars().first()
@@ -214,8 +237,22 @@ def daily_summary_snapshot_task() -> dict:
 
 
 def _compose_reminder_text(*, task_title: str, escalation: int) -> str:
+    title = _compact_task_title(task_title)
     if escalation <= 0:
-        return f"quick check: where are you at on '{task_title}'?"
+        return f"quick check: where are you at on '{title}'?"
     if escalation == 1:
-        return f"still waiting on '{task_title}'. what's the blocker?"
-    return f"we're slipping on '{task_title}'. give me the next concrete move right now."
+        return f"still waiting on '{title}'. what's the blocker?"
+    return f"we're slipping on '{title}'. give me the next concrete move right now."
+
+
+def _compact_task_title(task_title: str, max_chars: int = 72) -> str:
+    title = " ".join(task_title.split()).strip()
+    if len(title) <= max_chars:
+        return title
+    return f"{title[: max_chars - 3].rstrip()}..."
+
+
+def _ensure_datetime_tz(value: datetime, tzinfo) -> datetime:
+    if value.tzinfo is None and tzinfo is not None:
+        return value.replace(tzinfo=tzinfo)
+    return value

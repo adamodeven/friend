@@ -19,6 +19,7 @@ class FakeAdapter:
         self.enabled = enabled
         self.calls = 0
         self.text_calls = 0
+        self.models: list[str | None] = []
 
     def json_completion(  # noqa: ANN001
         self,
@@ -30,6 +31,7 @@ class FakeAdapter:
         request_timeout_seconds: float | None = None,
     ):
         self.calls += 1
+        self.models.append(model)
         if self.json_responses:
             return self.json_responses.pop(0)
         return None
@@ -44,6 +46,7 @@ class FakeAdapter:
         request_timeout_seconds: float | None = None,
     ):
         self.text_calls += 1
+        self.models.append(model)
         if self.text_responses:
             return self.text_responses.pop(0)
         # Simulate second-attempt regeneration by returning a clean default when queue is exhausted.
@@ -83,6 +86,17 @@ def test_open_ended_message_uses_llm_path():
     assert adapter.text_calls >= 1
     assert reply.used_fallback is False
     assert reply.messages
+
+
+def test_lightweight_checkin_uses_lightweight_model_route():
+    adapter = FakeAdapter([], enabled=True, json_responses=[{"messages": ["yo i'm here. what's the move?"]}])
+    composer = ConversationComposer(adapter=adapter)
+    composer._compose_model = "slow-model"  # type: ignore[attr-defined]
+    composer._lightweight_compose_model = "fast-model"  # type: ignore[attr-defined]
+    reply = composer.compose(_brief("yo", short_checkin=True))
+    assert reply.used_fallback is False
+    assert adapter.models
+    assert adapter.models[0] == "fast-model"
 
 
 def test_fallback_only_on_forced_model_failure():
@@ -127,6 +141,17 @@ def test_composer_repairs_when_internal_phrase_leaks():
     assert reply.regenerated_for_repetition is True
     assert adapter.text_calls >= 1
     assert "open conversational message received" not in " ".join(reply.messages).lower()
+
+
+def test_composer_strips_assistant_or_response_prefix_lines():
+    adapter = FakeAdapter(["assistant: here's the response:\n\nresponse: yo i'm here and tracking."], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("hey"))
+    assert reply.used_fallback is False
+    lowered = " ".join(reply.messages).lower()
+    assert "assistant:" not in lowered
+    assert "here's the response" not in lowered
+    assert "response:" not in lowered
 
 
 def test_composer_repairs_when_output_leaks_context_labels():

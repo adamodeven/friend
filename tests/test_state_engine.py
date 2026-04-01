@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from sqlalchemy import select
 
-from app.db.models import ScheduleBlock, Task, User
+from app.db.models import Reminder, ReminderStatus, ScheduleBlock, Task, TaskStatus, User
 from app.domain.state_engine import StateEngine
 from app.schemas.intent import ExtractedTask, IntentResult
 
@@ -118,3 +121,53 @@ def test_add_task_with_ambiguous_time_requests_clarification(db_session):
     assert outcome.should_ask_question is True
     assert outcome.question_if_needed is not None
     assert "clarify" in outcome.question_if_needed.lower()
+
+
+def test_bulk_clear_archives_active_tasks_and_pending_reminders(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    task_a = Task(user_id=user.id, title="Task A")
+    task_b = Task(user_id=user.id, title="Task B", status=TaskStatus.blocked)
+    db_session.add_all([task_a, task_b])
+    db_session.flush()
+    db_session.add(
+        Reminder(
+            user_id=user.id,
+            task_id=task_a.id,
+            status=ReminderStatus.pending,
+            scheduled_for=datetime.now(tz=ZoneInfo(user.timezone)),
+        )
+    )
+    db_session.commit()
+
+    engine = StateEngine()
+    intent = IntentResult(intent="update_task", confidence=0.95, task_updates={"bulk_action": "clear_active_tasks"})
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="clear all tasks",
+    )
+    db_session.commit()
+
+    refreshed = db_session.execute(select(Task).where(Task.user_id == user.id)).scalars().all()
+    assert all(task.status == TaskStatus.archived for task in refreshed)
+    reminder = db_session.execute(select(Reminder).where(Reminder.user_id == user.id)).scalars().first()
+    assert reminder is not None
+    assert reminder.status == ReminderStatus.skipped
+    assert outcome.response_goal == "confirm_update"
+    assert any("cleared active task list" in fact for fact in outcome.key_facts_to_include)
+
+
+def test_timeline_query_tomorrow_morning_routes_to_specific_window(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    engine = StateEngine()
+    intent = IntentResult(intent="timeline_query", confidence=0.9)
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="what do i need to get done tomorrow morning",
+    )
+    assert outcome.response_goal == "timeline_summary"
+    assert any("tomorrow morning" in fact.lower() for fact in outcome.key_facts_to_include)

@@ -92,6 +92,22 @@ def test_high_confidence_add_task_still_attempts_llm_before_fallback():
     assert adapter.json_calls >= 1
 
 
+def test_high_confidence_context_signal_short_circuits_llm_for_latency():
+    adapter = _CountingAdapter()
+    extractor = IntentExtractor(adapter=adapter)
+    result = extractor.extract("in class rn", "America/New_York")
+    assert result.intent == "context_signal"
+    assert adapter.json_calls == 0
+
+
+def test_simple_checkin_short_circuits_llm():
+    adapter = _CountingAdapter()
+    extractor = IntentExtractor(adapter=adapter)
+    result = extractor.extract("yo", "America/New_York")
+    assert result.intent == "general_chat"
+    assert adapter.json_calls == 0
+
+
 def test_llm_extracted_task_title_gets_sanitized():
     payload = {
         "intent": "add_task",
@@ -121,6 +137,13 @@ def test_fallback_detects_dependency_blocker_language():
     result = extractor.extract("i keep getting distracted because i need to fix the website first", "America/New_York")
     assert result.intent in {"update_task", "reflection"}
     assert result.blockers or result.intent == "reflection"
+
+
+def test_bulk_clear_task_language_maps_to_update_bulk_action():
+    extractor = IntentExtractor()
+    result = extractor.extract("alright we're getting there. can you clear all tasks?", "America/New_York")
+    assert result.intent == "update_task"
+    assert result.task_updates.get("bulk_action") == "clear_active_tasks"
 
 
 def test_ambiguous_time_sets_clarification_hint():

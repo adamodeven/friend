@@ -488,7 +488,9 @@ class OllamaAdapter:
             if "temperature" in options:
                 payload["temperature"] = options["temperature"]
             if "num_predict" in options:
-                payload["max_completion_tokens"] = options["num_predict"]
+                requested_tokens = max(1, int(options["num_predict"]))
+                min_tokens = 512 if options.get("format") == "json" else 160
+                payload["max_completion_tokens"] = max(requested_tokens, min_tokens)
             if "format" in options and options["format"] == "json":
                 payload["response_format"] = {"type": "json_object"}
         headers = {"Content-Type": "application/json"}

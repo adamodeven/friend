@@ -357,5 +357,49 @@ def test_openai_chat_completion_uses_max_completion_tokens_for_num_predict(monke
     assert result == "ok"
     payload = captured["json"]
     assert isinstance(payload, dict)
-    assert payload.get("max_completion_tokens") == 77
+    assert payload.get("max_completion_tokens") == 160
     assert "max_tokens" not in payload
+
+
+def test_openai_chat_completion_uses_higher_floor_for_json_format(monkeypatch) -> None:
+    adapter = _openai_adapter_for_test()
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def __init__(self, *, timeout=None) -> None:  # noqa: ANN001
+            self.timeout = timeout
+
+        def __enter__(self):  # noqa: ANN204
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001,ANN204
+            return False
+
+        def post(self, url: str, json: dict, headers: dict):  # noqa: ANN001,ANN201
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+
+            def _raise_for_status() -> None:
+                return None
+
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: {"choices": [{"message": {"content": "{\"intent\":\"general_chat\"}"}}]},
+                raise_for_status=_raise_for_status,
+            )
+
+    monkeypatch.setattr(llm_client.httpx, "Client", _Client)
+
+    result = adapter._openai_chat_completion(
+        system="s",
+        user="u",
+        model="gpt-5.4-nano",
+        options={"num_predict": 96, "format": "json"},
+    )
+
+    assert result is not None
+    payload = captured["json"]
+    assert isinstance(payload, dict)
+    assert payload.get("max_completion_tokens") == 512
+    assert payload.get("response_format") == {"type": "json_object"}

@@ -87,7 +87,7 @@ class ConversationComposer:
             system=self._system_prompt(strict=strict),
             user=payload,
             options=options,
-            request_timeout_seconds=12 if lightweight else 18,
+            request_timeout_seconds=20 if lightweight else 28,
         )
         return self._extract_messages_from_text(text)
 

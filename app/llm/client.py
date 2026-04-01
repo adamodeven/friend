@@ -397,7 +397,7 @@ class OllamaAdapter:
         if total_timeout is None:
             return None
         safe_attempts = max(1, attempts)
-        return max(4.0, float(total_timeout) / safe_attempts)
+        return max(8.0, float(total_timeout) / safe_attempts)
 
     @staticmethod
     def _parse_json(text: str) -> Any:

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import logging
+
 from celery import Celery
+from celery.signals import worker_ready
 
 from app.core.config import get_settings
+from app.llm.warmup import warmup_ollama_text_model
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 celery_app = Celery(
     "friend_worker",
@@ -29,3 +34,7 @@ celery_app.conf.beat_schedule = {
 }
 celery_app.conf.timezone = settings.timezone
 
+
+@worker_ready.connect
+def _warmup_llm_on_worker_start(**_kwargs) -> None:
+    warmup_ollama_text_model(logger=logger)

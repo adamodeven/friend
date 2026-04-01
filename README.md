@@ -138,6 +138,7 @@ https://<your-domain>/webhooks/twilio
 - `OLLAMA_PULL_VISION_ON_STARTUP=false` by default so chat starts faster.
 - `OLLAMA_TIMEOUT_SECONDS=45` default favors fail-fast behavior on CPU-only hosts.
 - `OLLAMA_AUTO_PULL_MISSING_MODELS=true` auto-recovers if a configured model is missing.
+- `OLLAMA_WARMUP_ON_STARTUP=true` pre-warms the text model on API/worker startup to reduce first-message latency.
 - Model pull is automated by the `ollama-init` compose service.
 - For low-RAM/CPU hosts, keep `OLLAMA_TEXT_MODEL=llama3.2:1b` for better SMS reliability.
 - `WORKER_CONCURRENCY=1` is recommended for one-user CPU boxes to reduce inference contention.
@@ -241,6 +242,7 @@ Required for production:
 - `OLLAMA_PULL_VISION_ON_STARTUP`
 - `OLLAMA_TIMEOUT_SECONDS`
 - `OLLAMA_AUTO_PULL_MISSING_MODELS`
+- `OLLAMA_WARMUP_ON_STARTUP`
 - `WORKER_CONCURRENCY`
 - `ADMIN_TOKEN`
 - `USER_PHONE_NUMBER`

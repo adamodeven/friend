@@ -52,6 +52,7 @@ class IntentExtractor:
         try:
             if payload.get("task"):
                 task = ExtractedTask.model_validate(payload["task"])
+                task.title = self._sanitize_task_title(task.title)
             else:
                 task = None
             result = IntentResult(
@@ -134,10 +135,28 @@ class IntentExtractor:
             "",
             cleaned,
         )
+        return IntentExtractor._sanitize_task_title(cleaned)
+
+    @staticmethod
+    def _sanitize_task_title(title: str) -> str:
+        cleaned = (title or "").lower().strip()
+        cleaned = cleaned.replace("\n", " ")
+        cleaned = re.sub(r"^[\"'`]+|[\"'`]+$", "", cleaned)
+        cleaned = re.sub(r"^(and then|and|then)\s+", "", cleaned)
+        cleaned = re.sub(r"^(i\s+(need to|have to|gotta|want to|should|must)\s+)", "", cleaned)
+        cleaned = re.sub(r"^(need to|have to|gotta|want to|should|must)\s+", "", cleaned)
+        cleaned = re.sub(r"^i\s+", "", cleaned)
+        cleaned = re.sub(
+            r"\b(and then|tmr morning|tomorrow morning|tomorrow night|tonight|this weekend|by eod|eod)\b",
+            "",
+            cleaned,
+        )
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.-")
         if len(cleaned) > 90:
             cleaned = cleaned[:90].rsplit(" ", 1)[0]
-        return cleaned.capitalize()
+        if not cleaned:
+            return "Task update"
+        return cleaned[0].upper() + cleaned[1:]
 
     @staticmethod
     def _extract_deadline_phrase(text: str) -> str | None:

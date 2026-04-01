@@ -10,6 +10,16 @@ class _CountingAdapter:
         return None
 
 
+class _PayloadAdapter:
+    def __init__(self, payload):
+        self.payload = payload
+        self.json_calls = 0
+
+    def json_completion(self, **kwargs):  # noqa: ANN003,ANN201
+        self.json_calls += 1
+        return self.payload
+
+
 def test_extract_add_task_from_plain_text():
     extractor = IntentExtractor()
     result = extractor.extract("yo I need to finish the CAD for the enclosure by tomorrow night", "America/New_York")
@@ -61,9 +71,46 @@ def test_fallback_task_title_removes_temporal_prefix_noise():
     assert "submit" in result.task.title.lower()
 
 
+def test_fallback_task_title_removes_leading_i_need_to_noise():
+    extractor = IntentExtractor()
+    result = extractor.extract(
+        "i need to submit my scout job application tomorrow morning",
+        "America/New_York",
+    )
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert result.task.title.lower().startswith("i ") is False
+    assert result.task.title.lower().startswith("need to ") is False
+    assert "submit my scout job application" in result.task.title.lower()
+
+
 def test_high_confidence_add_task_skips_llm_intent_call():
     adapter = _CountingAdapter()
     extractor = IntentExtractor(adapter=adapter)
     result = extractor.extract("i need to submit the application tomorrow morning", "America/New_York")
     assert result.intent == "add_task"
     assert adapter.json_calls == 0
+
+
+def test_llm_extracted_task_title_gets_sanitized():
+    payload = {
+        "intent": "add_task",
+        "confidence": 0.6,
+        "task": {
+            "title": "i need to submit my scout job application tomorrow morning",
+            "description": None,
+            "project": None,
+            "deadline_text": "tomorrow morning",
+            "priority": 2,
+            "confidence": 0.7,
+            "next_step": None,
+        },
+    }
+    adapter = _PayloadAdapter(payload)
+    extractor = IntentExtractor(adapter=adapter)
+    result = extractor._extract_with_llm("submit my scout job app tomorrow morning", "America/New_York")
+    assert adapter.json_calls == 1
+    assert result is not None
+    assert result.task is not None
+    assert result.task.title.lower().startswith("i ") is False
+    assert "tomorrow morning" not in result.task.title.lower()

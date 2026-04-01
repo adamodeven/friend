@@ -156,6 +156,18 @@ def test_composer_repairs_when_output_uses_smart_quote_scaffolding():
     assert "checkpoint 1" not in lowered
 
 
+def test_composer_repairs_when_output_leaks_actual_response_wrapper():
+    adapter = FakeAdapter(["Here is the actual response from me:\n\ni'm here assistant. what's on your mind?"], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("no why would i break that up"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "actual response from me" not in lowered
+    assert "i'm here assistant" not in lowered
+    assert "what's on your mind?" not in lowered
+
+
 def test_composer_repairs_when_output_leaks_parenthesized_key_value_dump():
     adapter = FakeAdapter(["tasks=(none) deadlines=(tonight) next_step=finish_bot"], enabled=True)
     composer = ConversationComposer(adapter=adapter)

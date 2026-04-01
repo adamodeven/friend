@@ -369,11 +369,14 @@ class ConversationComposer:
             "recent thread",
             "internal context",
             "here's the response",
+            "here is the actual response from me",
             "checkpoint 1",
             "i've been noticing your responses",
             "here are my thoughts:",
             "be direct about whether this reply is live-generated right now",
             "confirm current system status plainly",
+            "i'm here assistant",
+            "what's on your mind?",
         ]
 
     @staticmethod
@@ -421,6 +424,10 @@ class ConversationComposer:
         if "due negative" in lowered:
             return True
         if "user asked:" in lowered:
+            return True
+        if "|" in candidate:
+            return True
+        if "actual response from me" in lowered:
             return True
         tail_word = lowered.rstrip(" .!?").split(" ")[-1] if lowered else ""
         if not re.search(r"[.!?]['\"]?$", candidate.strip()) and tail_word in {

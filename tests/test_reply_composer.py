@@ -197,6 +197,34 @@ def test_composer_repairs_when_output_leaks_internal_colon_prefix():
     assert "task_manager:" not in lowered
 
 
+def test_short_checkin_repair_rejects_task_timeline_drift():
+    adapter = FakeAdapter(["hey yo whatup add a few things before tomorrow morning to make sure everything is good for review"], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("yo whatup", short_checkin=True))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "tomorrow morning" not in lowered
+    assert "review" not in lowered
+
+
+def test_acknowledge_new_task_repair_requires_capture_or_next_move_markers():
+    adapter = FakeAdapter(["submit your scout job app before morning"], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="acknowledge_new_task",
+            latest_user_message="i need to submit my scout job application tomorrow morning",
+            suggested_next_step="do a final proofread, then submit scout job application",
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "next move:" in lowered or "got it" in lowered or "locked in" in lowered or "captured" in lowered
+
+
 def test_composer_repairs_when_output_leaks_instructional_phrase():
     adapter = FakeAdapter(["be direct about whether this reply is live-generated right now"], enabled=True)
     composer = ConversationComposer(adapter=adapter)

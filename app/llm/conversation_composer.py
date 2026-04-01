@@ -496,6 +496,7 @@ class ConversationComposer:
     def _postprocess_messages(cls, messages: list[str], brief: ReplyBrief) -> list[str]:
         if not messages:
             return messages
+        messages = [cls._strip_wrapping_quotes(m) for m in messages]
         first = messages[0].strip()
         user_norm = cls._normalize_text(brief.latest_user_message)
         first_norm = cls._normalize_text(first)
@@ -505,6 +506,13 @@ class ConversationComposer:
         if brief.response_goal == "answer_question" and first.endswith("?") and len(messages) > 1:
             return messages[1:]
         return messages
+
+    @staticmethod
+    def _strip_wrapping_quotes(text: str) -> str:
+        stripped = text.strip()
+        if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {'"', "'"}:
+            return stripped[1:-1].strip()
+        return stripped
 
     @classmethod
     def _merge_tiny_lead_bubble(cls, messages: list[str], brief: ReplyBrief) -> list[str]:
@@ -554,6 +562,8 @@ class ConversationComposer:
             return True
 
         if brief.response_goal == "acknowledge_new_task":
+            if not any(marker in combined for marker in ("got it", "locked in", "captured", "added", "noted", "next move")):
+                return True
             if "what's on your mind?" in combined:
                 return True
             if re.search(r"^\s*[a-z_]+\s*:\s*[a-z_]+\s*:", combined):
@@ -561,8 +571,17 @@ class ConversationComposer:
             if "captured" not in combined and "next move" not in combined and "submit" not in combined and "deadline" not in combined:
                 return True
 
-        if brief.response_goal == "open_conversation" and "status active" in combined:
-            return True
+        if brief.response_goal == "open_conversation":
+            if "status active" in combined:
+                return True
+            if brief.is_short_checkin:
+                if len(combined.split()) > 18:
+                    return True
+                if any(token in combined for token in ["tomorrow", "deadline", "submit", "review", "application"]):
+                    return True
+            lowered_user = brief.latest_user_message.lower()
+            if "what i do" in combined and not any(token in lowered_user for token in ["what do", "what can", "are you", "do you"]):
+                return True
 
         return False
 

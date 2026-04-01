@@ -60,3 +60,27 @@ def test_meta_question_brief_omits_task_context(db_session):
     )
     assert brief.active_task_context == []
     assert brief.deadline_context == []
+
+
+def test_open_conversation_brief_omits_task_context_when_message_is_casual(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    db_session.add(
+        Task(
+            user_id=user.id,
+            title="Prepare portfolio",
+            status=TaskStatus.active,
+            priority=1,
+        )
+    )
+    db_session.commit()
+
+    builder = ReplyBriefBuilder()
+    outcome = StateOutcome(response_goal="open_conversation")
+    brief = builder.build(
+        db_session,
+        user=user,
+        latest_user_message="hey",
+        outcome=outcome,
+    )
+    assert brief.active_task_context == []
+    assert brief.deadline_context == []

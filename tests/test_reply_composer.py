@@ -131,6 +131,21 @@ def test_composer_regenerates_when_output_leaks_context_labels():
     assert "active tasks:" not in " ".join(reply.messages).lower()
 
 
+def test_composer_regenerates_when_output_looks_like_internal_task_dump():
+    adapter = FakeAdapter(
+        [
+            "status active p2 due negative",
+            "you're good. i'm live and tracking. what's next?",
+        ],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("you online?"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    assert "status active p2 due negative" not in " ".join(reply.messages).lower()
+
+
 def test_composer_regenerates_when_it_parrots_user_message():
     adapter = FakeAdapter(
         [

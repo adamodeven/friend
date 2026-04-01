@@ -245,6 +245,12 @@ class ConversationComposer:
         lowered = candidate.lower().strip()
         if any(token in lowered for token in cls._quality_banned_openers()):
             return True
+        if "status=" in lowered or "[status" in lowered or "due=-" in lowered:
+            return True
+        if re.search(r"\bstatus\s+[a-z_]+\s+p[0-9]\b", lowered):
+            return True
+        if "due negative" in lowered:
+            return True
         if "user asked:" in lowered:
             return True
 

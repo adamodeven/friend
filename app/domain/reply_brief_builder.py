@@ -36,10 +36,10 @@ class ReplyBriefBuilder:
         active_tasks = list_active_tasks(session, user.id)[:6]
         active_task_context = []
         for task in active_tasks:
-            due = "-"
+            due = "no deadline"
             if task.deadline_at:
                 due = task.deadline_at.astimezone(ZoneInfo(user.timezone)).strftime("%a %-m/%-d %-I:%M%p").lower()
-            active_task_context.append(f"{task.title} [status={task.status.value}, p{task.priority}, due={due}]")
+            active_task_context.append(f"{task.title} (status {task.status.value}, priority {task.priority}, due {due})")
 
         upcoming = list_upcoming_deadlines(session, user.id, within_days=7)[:6]
         deadline_context = []
@@ -49,11 +49,11 @@ class ReplyBriefBuilder:
             due = task.deadline_at.astimezone(ZoneInfo(user.timezone)).strftime("%a %-m/%-d %-I:%M%p").lower()
             deadline_context.append(f"{task.title} due {due}")
 
-        # Keep capability/meta replies conversational and avoid unnecessary task-context bleed.
+        # Keep conversational/meta replies clean and avoid unnecessary task-context bleed.
         lowered_message = latest_user_message.lower()
-        if outcome.response_goal == "answer_question" and not any(
-            token in lowered_message for token in ["task", "deadline", "due", "plan", "project", "week", "today", "tonight"]
-        ):
+        context_tokens = ["task", "deadline", "due", "plan", "project", "week", "today", "tonight", "tomorrow", "hour"]
+        wants_task_context = any(token in lowered_message for token in context_tokens)
+        if outcome.response_goal in {"answer_question", "open_conversation", "acknowledge_context"} and not wants_task_context:
             active_task_context = []
             deadline_context = []
 

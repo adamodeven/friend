@@ -73,3 +73,22 @@ def test_general_progress_message_maps_to_progress_response_goal(db_session):
         raw_text="lowk making good progress now",
     )
     assert outcome.response_goal == "react_to_progress"
+
+
+def test_single_add_task_does_not_force_checkpoint_question(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    engine = StateEngine()
+    intent = IntentResult(
+        intent="add_task",
+        confidence=0.9,
+        task=ExtractedTask(title="Submit scout job application", deadline_text="tomorrow morning"),
+    )
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="tomorrow morning i need to submit my scout job application",
+    )
+    assert outcome.response_goal == "acknowledge_new_task"
+    assert outcome.should_ask_question is False
+    assert outcome.question_if_needed is None

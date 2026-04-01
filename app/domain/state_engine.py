@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import re
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -77,8 +78,12 @@ class StateEngine:
 
             outcome.should_push_for_action = True
             outcome.suggested_next_step = intent.task.next_step or self._default_next_step(task.title)
-            outcome.question_if_needed = "want me to break that into 2 quick checkpoints?"
-            outcome.should_ask_question = True
+            if self._should_offer_checkpoints(task_title=task.title, raw_text=raw_text, suggested_next_step=intent.task.next_step):
+                outcome.question_if_needed = "want me to break that into 2 quick checkpoints?"
+                outcome.should_ask_question = True
+            else:
+                outcome.question_if_needed = None
+                outcome.should_ask_question = False
             outcome.emotional_tone = "direct"
 
         elif intent.intent == "complete_task":
@@ -226,6 +231,20 @@ class StateEngine:
     @staticmethod
     def _default_next_step(task_title: str) -> str:
         return f"start a 20-min first pass on {task_title}"
+
+    @staticmethod
+    def _should_offer_checkpoints(*, task_title: str, raw_text: str, suggested_next_step: str | None) -> bool:
+        if suggested_next_step:
+            return False
+        lowered = raw_text.lower()
+        if any(token in lowered for token in ["just one", "one thing", "just need to", "just have to", "single thing"]):
+            return False
+        action_count = len(re.findall(r"\b(need to|have to|gotta|must)\b", lowered))
+        if action_count > 1:
+            return True
+        if len(task_title.split()) >= 12:
+            return True
+        return False
 
     @staticmethod
     def _urgency_from_deadline(deadline_at: datetime, timezone_name: str) -> str:

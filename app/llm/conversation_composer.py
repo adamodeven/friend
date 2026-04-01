@@ -51,30 +51,47 @@ class ConversationComposer:
         if not messages:
             return None, False
 
+        needs_repair = self._needs_repair(messages, brief)
+        if needs_repair:
+            strict_retry = self._generate_messages(
+                brief=brief,
+                avoid_phrases=avoid_phrases,
+                strict=True,
+                lightweight=False,
+            )
+            if strict_retry and not self._needs_repair(strict_retry, brief):
+                messages = strict_retry
+                regenerated = True
+            else:
+                repaired = self._repair_low_quality(brief=brief, recent_assistant=recent_assistant)
+                if repaired:
+                    messages = repaired
+                    regenerated = True
+                elif lightweight:
+                    return None, False
+
         combined = " ".join(messages)
         if self._looks_hard_structured_leak(combined):
-            return None, False
-        needs_repair = (
-            self._looks_internal_or_robotic(combined)
-            or self._looks_low_quality(combined, brief.latest_user_message)
-            or self._has_parrot_bubble(messages, brief.latest_user_message)
-            or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
-            or self._answer_quality_needs_repair(messages, brief)
-        )
-        if needs_repair:
             repaired = self._repair_low_quality(brief=brief, recent_assistant=recent_assistant)
             if repaired:
                 messages = repaired
-                combined = " ".join(messages)
                 regenerated = True
-            elif lightweight:
-                return None, False
 
         combined = " ".join(messages)
         if self.repetition_guard.is_too_similar(combined, recent_assistant):
             messages[-1] = self._force_distinct_tail(messages[-1], brief)
             regenerated = True
         return messages, regenerated
+
+    def _needs_repair(self, messages: list[str], brief: ReplyBrief) -> bool:
+        combined = " ".join(messages)
+        return (
+            self._looks_internal_or_robotic(combined)
+            or self._looks_low_quality(combined, brief.latest_user_message)
+            or self._has_parrot_bubble(messages, brief.latest_user_message)
+            or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
+            or self._answer_quality_needs_repair(messages, brief)
+        )
 
     def _generate_messages(
         self,
@@ -139,20 +156,24 @@ class ConversationComposer:
 
         if lightweight:
             return (
-                f"user_message: {brief.latest_user_message}\n"
-                f"goal={brief.response_goal} tone={brief.style_mode} urgency={brief.urgency_level}\n"
-                f"reason={brief.operational_reason or '(none)'}\n"
-                f"facts={'; '.join(key_facts)}\n"
-                f"next_step={next_step}\n"
-                f"question={question}\n"
-                f"thread={' | '.join(recent_thread)}\n"
-                f"tasks={'; '.join(tasks)}\n"
-                f"deadlines={'; '.join(deadlines)}\n"
-                f"flags={'; '.join(flags)}\n"
-                f"notes={'; '.join(notes)}\n"
-                f"avoid_openers={'; '.join(avoid)}\n"
-                f"max_chunks={brief.max_chunks} max_chunk_length={brief.max_chunk_length}\n"
-                "Reply like a human text, answer directly, 1-3 short bubbles."
+                "INTERNAL CONTEXT (DO NOT QUOTE OR PARAPHRASE):\n"
+                f"- user said: {brief.latest_user_message}\n"
+                f"- goal: {brief.response_goal}\n"
+                f"- tone: {brief.style_mode}\n"
+                f"- urgency: {brief.urgency_level}\n"
+                f"- reason: {brief.operational_reason or '(none)'}\n"
+                f"- facts: {'; '.join(key_facts)}\n"
+                f"- next step: {next_step}\n"
+                f"- question: {question}\n"
+                f"- recent thread: {' | '.join(recent_thread)}\n"
+                f"- active tasks: {'; '.join(tasks)}\n"
+                f"- deadlines: {'; '.join(deadlines)}\n"
+                f"- state flags: {'; '.join(flags)}\n"
+                f"- memory notes: {'; '.join(notes)}\n"
+                f"- avoid repeated openers: {'; '.join(avoid)}\n"
+                f"- max chunks: {brief.max_chunks}\n"
+                f"- max chunk length: {brief.max_chunk_length}\n"
+                "Write the actual user-facing reply only. 1-3 short text bubbles."
             )
 
         payload = (
@@ -296,6 +317,22 @@ class ConversationComposer:
     @staticmethod
     def _quality_banned_openers() -> list[str]:
         return [
+            "user_message:",
+            "goal=",
+            "tone=",
+            "urgency=",
+            "reason=",
+            "facts=",
+            "next_step=",
+            "question=",
+            "thread=",
+            "tasks=",
+            "deadlines=",
+            "flags=",
+            "notes=",
+            "avoid_openers=",
+            "max_chunks=",
+            "max_chunk_length=",
             "open conversational message received",
             "general chat intent",
             "intent=",
@@ -307,6 +344,9 @@ class ConversationComposer:
             "upcoming deadlines:",
             "key facts",
             "recent thread",
+            "internal context",
+            "here's the response",
+            "checkpoint 1",
             "be direct about whether this reply is live-generated right now",
             "confirm current system status plainly",
         ]
@@ -314,7 +354,14 @@ class ConversationComposer:
     @staticmethod
     def _looks_hard_structured_leak(text: str) -> bool:
         lowered = text.lower()
-        return "status=" in lowered or "[status" in lowered or "due=-" in lowered
+        if "status=" in lowered or "[status" in lowered or "due=-" in lowered:
+            return True
+        if re.search(
+            r"\b(user_message|goal|tone|urgency|reason|facts|next_step|question|thread|tasks|deadlines|flags|notes|avoid_openers|max_chunks|max_chunk_length)\s*[:=]",
+            lowered,
+        ):
+            return True
+        return False
 
     @classmethod
     def _looks_low_quality(cls, candidate: str, latest_user_message: str) -> bool:
@@ -322,6 +369,10 @@ class ConversationComposer:
         if any(token in lowered for token in cls._quality_banned_openers()):
             return True
         if cls._looks_hard_structured_leak(lowered):
+            return True
+        if re.search(r"(^|\n)\s*(#{1,6}|\*\*|-\s+|\d+\.)", candidate):
+            return True
+        if "```" in candidate:
             return True
         if re.search(r"\bstatus\s+[a-z_]+\s+p[0-9]\b", lowered):
             return True

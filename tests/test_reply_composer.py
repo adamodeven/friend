@@ -107,7 +107,7 @@ def test_composer_repairs_when_internal_phrase_leaks():
     reply = composer.compose(_brief("is this thing on?"))
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
-    assert adapter.text_calls == 1
+    assert adapter.text_calls >= 1
     assert "open conversational message received" not in " ".join(reply.messages).lower()
 
 
@@ -117,8 +117,31 @@ def test_composer_repairs_when_output_leaks_context_labels():
     reply = composer.compose(_brief("are you actually live now"))
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
-    assert adapter.text_calls == 1
+    assert adapter.text_calls >= 1
     assert "active tasks:" not in " ".join(reply.messages).lower()
+
+
+def test_composer_repairs_when_output_leaks_lightweight_key_value_dump():
+    adapter = FakeAdapter(["user_message: yo whatup tasks=(none) deadlines=(tonight) next_step=finish_bot"], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("yo whatup"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "user_message:" not in lowered
+    assert "tasks=(" not in lowered
+    assert "next_step=" not in lowered
+
+
+def test_composer_repairs_when_output_uses_markdown_scaffolding():
+    adapter = FakeAdapter(["Here's the response:\n\n**Checkpoint 1** Hey, I see where you're at!"], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("no why would i break that up"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "here's the response" not in lowered
+    assert "checkpoint 1" not in lowered
 
 
 def test_composer_repairs_when_output_leaks_instructional_phrase():

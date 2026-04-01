@@ -55,40 +55,55 @@ class ConversationComposer:
         regenerated = False
         avoid_phrases = self.repetition_guard.avoid_phrases(recent_assistant, limit=4)
         lightweight = self._should_use_lightweight_compose(brief)
-        messages = self._generate_messages(brief=brief, avoid_phrases=avoid_phrases, strict=False, lightweight=lightweight)
+        messages = self._generate_messages_structured(
+            brief=brief,
+            avoid_phrases=avoid_phrases,
+            strict=False,
+            lightweight=lightweight,
+            quality_errors=[],
+        )
+        if not messages:
+            messages = self._generate_messages(
+                brief=brief,
+                avoid_phrases=avoid_phrases,
+                strict=False,
+                lightweight=lightweight,
+                quality_errors=[],
+            )
         if not messages:
             return None, False
 
-        needs_repair = self._needs_repair(messages, brief)
-        if needs_repair:
-            strict_retry = self._generate_messages(
+        for _ in range(2):
+            quality_errors = self._quality_errors(messages, brief)
+            if self.repetition_guard.is_too_similar(" ".join(messages), recent_assistant):
+                quality_errors.append("too similar to recent assistant phrasing; reword opener and sentence cadence")
+            if not quality_errors:
+                return messages, regenerated
+
+            regenerated = True
+            strict_retry = self._generate_messages_structured(
                 brief=brief,
                 avoid_phrases=avoid_phrases,
                 strict=True,
                 lightweight=False,
+                quality_errors=quality_errors,
             )
-            if strict_retry and not self._needs_repair(strict_retry, brief):
-                messages = strict_retry
-                regenerated = True
-            else:
-                repaired = self._repair_low_quality(brief=brief, recent_assistant=recent_assistant)
-                if repaired:
-                    messages = repaired
-                    regenerated = True
-                elif lightweight:
-                    return None, False
+            if not strict_retry:
+                strict_retry = self._generate_messages(
+                    brief=brief,
+                    avoid_phrases=avoid_phrases,
+                    strict=True,
+                    lightweight=False,
+                    quality_errors=quality_errors,
+                )
+            if not strict_retry:
+                return None, regenerated
+            messages = strict_retry
 
-        combined = " ".join(messages)
-        if self._looks_hard_structured_leak(combined):
-            repaired = self._repair_low_quality(brief=brief, recent_assistant=recent_assistant)
-            if repaired:
-                messages = repaired
-                regenerated = True
-
-        combined = " ".join(messages)
-        if self.repetition_guard.is_too_similar(combined, recent_assistant):
-            messages[-1] = self._force_distinct_tail(messages[-1], brief)
-            regenerated = True
+        if self._needs_repair(messages, brief):
+            return None, regenerated
+        if self.repetition_guard.is_too_similar(" ".join(messages), recent_assistant):
+            return None, regenerated
         return messages, regenerated
 
     def _needs_repair(self, messages: list[str], brief: ReplyBrief) -> bool:
@@ -110,8 +125,14 @@ class ConversationComposer:
         avoid_phrases: list[str],
         strict: bool,
         lightweight: bool,
+        quality_errors: list[str],
     ) -> list[str] | None:
-        payload = self._model_payload(brief=brief, avoid_phrases=avoid_phrases, lightweight=lightweight)
+        payload = self._model_payload(
+            brief=brief,
+            avoid_phrases=avoid_phrases,
+            lightweight=lightweight,
+            quality_errors=quality_errors,
+        )
         options = {
             "temperature": 0.58 if not strict else 0.42,
             "num_predict": 40 if lightweight else 52,
@@ -126,6 +147,45 @@ class ConversationComposer:
             request_timeout_seconds=14 if lightweight else 22,
         )
         return self._extract_messages_from_text(text)
+
+    def _generate_messages_structured(
+        self,
+        *,
+        brief: ReplyBrief,
+        avoid_phrases: list[str],
+        strict: bool,
+        lightweight: bool,
+        quality_errors: list[str],
+    ) -> list[str] | None:
+        payload = self._model_payload(
+            brief=brief,
+            avoid_phrases=avoid_phrases,
+            lightweight=lightweight,
+            quality_errors=quality_errors,
+        )
+        options = {
+            "temperature": 0.52 if not strict else 0.35,
+            "num_predict": 72 if lightweight else 110,
+            "num_ctx": 640 if lightweight else 900,
+            "repeat_penalty": 1.15,
+        }
+        result = self.adapter.json_completion(
+            system=self._structured_system_prompt(strict=strict),
+            user=payload,
+            model=self._compose_model,
+            options=options,
+            request_timeout_seconds=16 if lightweight else 24,
+        )
+        if not isinstance(result, dict):
+            return None
+        messages_raw = result.get("messages")
+        if isinstance(messages_raw, list):
+            messages = [str(m).strip() for m in messages_raw if str(m).strip()]
+            return messages or None
+        single = result.get("message")
+        if isinstance(single, str) and single.strip():
+            return [single.strip()]
+        return None
 
     @staticmethod
     def _system_prompt(*, strict: bool) -> str:
@@ -153,7 +213,33 @@ class ConversationComposer:
             f"{strict_rules}"
         )
 
-    def _model_payload(self, *, brief: ReplyBrief, avoid_phrases: list[str], lightweight: bool) -> str:
+    @staticmethod
+    def _structured_system_prompt(*, strict: bool) -> str:
+        strict_rules = (
+            "You must obey all constraints strictly. "
+            "Never include labels, markdown, code blocks, headings, or analysis text. "
+            "Never output the user's exact sentence as a standalone bubble. "
+            if strict
+            else ""
+        )
+        return (
+            "You write outbound SMS replies for a personal execution manager. "
+            "Output valid JSON only with this exact schema: {\"messages\": [\"bubble 1\", \"bubble 2\"]}. "
+            "messages must contain 1 to 3 short text bubbles, each natural and human. "
+            "No markdown, no numbering, no bullet points, no labels, no em dash. "
+            "Answer the latest user message directly and keep context continuity. "
+            "If asked whether responses are live/canned, answer that directly in the first bubble. "
+            f"{strict_rules}"
+        )
+
+    def _model_payload(
+        self,
+        *,
+        brief: ReplyBrief,
+        avoid_phrases: list[str],
+        lightweight: bool,
+        quality_errors: list[str],
+    ) -> str:
         recent_thread = brief.recent_thread[-(2 if lightweight else 5) :] or ["(no prior thread)"]
         key_facts = brief.key_facts_to_include[: (2 if lightweight else 4)] or ["(none)"]
         tasks = (brief.active_task_context[:1] if lightweight else brief.active_task_context[:3]) or ["(none)"]
@@ -161,9 +247,11 @@ class ConversationComposer:
         flags = (brief.current_state_flags[:1] if lightweight else brief.current_state_flags[:3]) or ["(none)"]
         notes = (brief.memory_notes[:1] if lightweight else brief.memory_notes[:2]) or ["(none)"]
         avoid = avoid_phrases[:3] or ["(none)"]
+        errors = quality_errors[:5] or ["(none)"]
         question = brief.question_if_needed or "(none)"
         next_step = brief.suggested_next_step or "(none)"
         short_checkin = "yes" if brief.is_short_checkin else "no"
+        style_hint = self._style_hint(brief.style_mode)
 
         def _lines(items: list[str]) -> str:
             return "\n".join(f"- {item}" for item in items)
@@ -173,7 +261,8 @@ class ConversationComposer:
                 "INTERNAL CONTEXT (DO NOT QUOTE OR PARAPHRASE):\n"
                 f"- user said: {brief.latest_user_message}\n"
                 f"- goal: {brief.response_goal}\n"
-                f"- tone: {brief.style_mode}\n"
+                f"- tone mode: {brief.style_mode}\n"
+                f"- tone hint: {style_hint}\n"
                 f"- urgency: {brief.urgency_level}\n"
                 f"- reason: {brief.operational_reason or '(none)'}\n"
                 f"- short checkin: {short_checkin}\n"
@@ -186,6 +275,7 @@ class ConversationComposer:
                 f"- state flags: {'; '.join(flags)}\n"
                 f"- memory notes: {'; '.join(notes)}\n"
                 f"- avoid repeated openers: {'; '.join(avoid)}\n"
+                f"- avoid these quality issues: {'; '.join(errors)}\n"
                 f"- max chunks: {brief.max_chunks}\n"
                 f"- max chunk length: {brief.max_chunk_length}\n"
                 "Write the actual user-facing reply only. 1-3 short text bubbles."
@@ -196,6 +286,7 @@ class ConversationComposer:
             f"REPLY GOAL: {brief.response_goal}\n"
             f"URGENCY: {brief.urgency_level}\n"
             f"TONE MODE: {brief.style_mode}\n"
+            f"STYLE HINT: {style_hint}\n"
             f"REASON FOR REPLY: {brief.operational_reason or '(none)'}\n\n"
             f"SHORT CHECKIN: {short_checkin}\n\n"
             f"KEY FACTS TO INCLUDE:\n{_lines(key_facts)}\n\n"
@@ -207,6 +298,7 @@ class ConversationComposer:
             f"MEMORY NOTES:\n{_lines(notes)}\n\n"
             f"RECENT THREAD:\n{_lines(recent_thread)}\n\n"
             f"AVOID REPEATING THESE OPENERS:\n{_lines(avoid)}\n\n"
+            f"QUALITY ISSUES TO AVOID ON THIS ATTEMPT:\n{_lines(errors)}\n\n"
             f"OUTPUT CONSTRAINTS:\n"
             f"- max_chunks={brief.max_chunks}\n"
             f"- max_chunk_length={brief.max_chunk_length}\n"
@@ -216,6 +308,14 @@ class ConversationComposer:
             "- never expose internal system labels\n"
         )
         return payload
+
+    @staticmethod
+    def _style_hint(style_mode: str) -> str:
+        if style_mode == "direct":
+            return "very concise, low slang, clean and decisive"
+        if style_mode == "more_serious":
+            return "focused and grounded, minimal playfulness, clear urgency"
+        return "casual_cool: short, socially fluent, modern texting cadence, light natural slang only when fitting"
 
     @staticmethod
     def _should_use_lightweight_compose(brief: ReplyBrief) -> bool:
@@ -234,14 +334,6 @@ class ConversationComposer:
             return blocks
         lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
         return lines or [text.strip()]
-
-    @staticmethod
-    def _force_distinct_tail(last_message: str, brief: ReplyBrief) -> str:
-        if brief.question_if_needed:
-            return f"{last_message} {brief.question_if_needed}".strip()
-        if brief.suggested_next_step:
-            return f"{last_message} next move: {brief.suggested_next_step}".strip()
-        return f"{last_message} what's the real next move from your side?".strip()
 
     def _fallback_messages(self, brief: ReplyBrief) -> list[str]:
         # Failure-only safety net; should not be the normal UX path.
@@ -273,54 +365,6 @@ class ConversationComposer:
         idx = int(digest[:8], 16) % len(options)
         return options[idx]
 
-    def _repair_low_quality(self, *, brief: ReplyBrief, recent_assistant: list[str]) -> list[str] | None:
-        opening = self._repair_opening(brief.latest_user_message, recent_assistant)
-        clean_facts = [fact for fact in brief.key_facts_to_include if not fact.lower().startswith("user asked:")]
-        direct_fact = clean_facts[0] if clean_facts else ""
-
-        if brief.response_goal == "answer_question":
-            if direct_fact:
-                text = f"{direct_fact} {brief.question_if_needed or ''}".strip()
-            else:
-                text = f"{opening} i'm live and tracking this."
-        elif brief.is_short_checkin:
-            text = f"{opening} i'm here. what's the main move right now?"
-        elif brief.response_goal == "acknowledge_new_task":
-            step = brief.suggested_next_step or "what's the first concrete step?"
-            text = f"{opening} captured. next move: {step}"
-        elif brief.response_goal == "react_to_progress":
-            step = brief.suggested_next_step or "what's the next concrete step?"
-            text = f"{opening} that's real progress. {step}"
-        elif brief.response_goal == "replan_blocker":
-            prompt = brief.question_if_needed or "what's the smallest move that gets this unstuck?"
-            text = f"{opening} let's keep it simple. {prompt}"
-        elif brief.should_ask_question and brief.question_if_needed:
-            text = f"{opening} {brief.question_if_needed}"
-        elif brief.suggested_next_step:
-            text = f"{opening} next move: {brief.suggested_next_step}"
-        elif direct_fact:
-            text = f"{opening} {direct_fact}"
-        else:
-            text = f"{opening} what's the main thing you want to lock in next?"
-
-        return self.chunker.chunk(
-            text,
-            max_chunk_length=brief.max_chunk_length,
-            max_chunks=min(brief.max_chunks, 2),
-        )
-
-    @staticmethod
-    def _repair_opening(seed: str, recent_assistant: list[str]) -> str:
-        options = [
-            "yep, i'm here.",
-            "i got you.",
-            "got it.",
-            "locked in.",
-        ]
-        digest = hashlib.sha1(f"{seed}|{'|'.join(recent_assistant[-2:])}".encode("utf-8")).hexdigest()
-        idx = int(digest[:8], 16) % len(options)
-        return options[idx]
-
     def _is_unacceptable_output(self, messages: list[str], brief: ReplyBrief) -> bool:
         combined = " ".join(messages)
         return (
@@ -331,7 +375,29 @@ class ConversationComposer:
             or self._has_nonsequitur_for_short_checkin(messages, brief)
             or self._goal_alignment_needs_repair(messages, brief)
             or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
+            or self._answer_quality_needs_repair(messages, brief)
         )
+
+    def _quality_errors(self, messages: list[str], brief: ReplyBrief) -> list[str]:
+        combined = " ".join(messages)
+        errors: list[str] = []
+        if self._looks_internal_or_robotic(combined):
+            errors.append("contains internal labels or scaffolding text")
+        if self._looks_low_quality(combined, brief.latest_user_message):
+            errors.append("contains malformed output, markdown, or structured key/value leaks")
+        if self._has_scaffolding_preface(messages):
+            errors.append("starts with scaffolding preface instead of user-facing text")
+        if self._has_parrot_bubble(messages, brief.latest_user_message):
+            errors.append("parrots user wording too closely")
+        if self._has_nonsequitur_for_short_checkin(messages, brief):
+            errors.append("short check-in response drifts off-topic")
+        if self._goal_alignment_needs_repair(messages, brief):
+            errors.append("response does not match the reply goal")
+        if self._first_bubble_asks_question_when_direct_answer_needed(messages, brief):
+            errors.append("first bubble asks a question when a direct answer is required")
+        if self._answer_quality_needs_repair(messages, brief):
+            errors.append("first bubble lacks a direct answer for status/meta question")
+        return errors
 
     @classmethod
     def _looks_internal_or_robotic(cls, text: str) -> bool:

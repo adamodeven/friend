@@ -79,7 +79,17 @@ class StateEngine:
             outcome.should_push_for_action = True
             resolved_next_step = intent.task.next_step or self._default_next_step(task.title)
             outcome.suggested_next_step = resolved_next_step
-            if self._should_offer_checkpoints(task_title=task.title, raw_text=raw_text, suggested_next_step=resolved_next_step):
+            needs_time_clarification = bool(
+                intent.needs_clarification
+                or (intent.time_reference and (not task.deadline_at or intent.time_confidence < 0.6))
+            )
+            if needs_time_clarification:
+                outcome.should_ask_question = True
+                outcome.question_if_needed = intent.clarification_question or self._time_clarification_question(
+                    task_title=task.title,
+                    time_reference=intent.time_reference or intent.task.deadline_text or "that time",
+                )
+            elif self._should_offer_checkpoints(task_title=task.title, raw_text=raw_text, suggested_next_step=resolved_next_step):
                 outcome.question_if_needed = "want me to break that into 2 quick checkpoints?"
                 outcome.should_ask_question = True
             else:
@@ -260,6 +270,14 @@ class StateEngine:
         if len(task_title.split()) >= 12:
             return True
         return False
+
+    @staticmethod
+    def _time_clarification_question(*, task_title: str, time_reference: str) -> str:
+        cleaned_task = task_title.strip()
+        cleaned_ref = time_reference.strip()
+        if len(cleaned_task) > 80:
+            cleaned_task = f"{cleaned_task[:77].rstrip()}..."
+        return f"quick clarify: for '{cleaned_task}', what exact time should i use for '{cleaned_ref}'?"
 
     @staticmethod
     def _urgency_from_deadline(deadline_at: datetime, timezone_name: str) -> str:

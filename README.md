@@ -79,7 +79,7 @@ python3 scripts/bootstrap_user.py
 ```
 7. Run API:
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port "${APP_PORT:-8000}"
 ```
 8. Run worker:
 ```bash
@@ -216,6 +216,11 @@ docker exec friend-ollama ollama ps
 bash scripts/simulate_twilio_webhook.sh "yo I need to finish the CAD for the enclosure by tomorrow night"
 ```
 
+### Stress simulation (many mixed inbound texts)
+```bash
+APP_PORT=8045 ROUNDS=120 bash scripts/stress_simulate_twilio.sh
+```
+
 ### Via admin simulation endpoint
 ```bash
 curl -X POST http://localhost:8000/api/messages/simulate \
@@ -345,6 +350,11 @@ Recommended:
 
 ```bash
 pytest -q
+```
+
+Targeted stress/behavior suite:
+```bash
+pytest -q tests/test_stress_conversation_behaviors.py tests/test_reply_composer.py tests/test_intent_extraction.py tests/test_state_engine.py tests/test_time_utils.py
 ```
 
 Current suite validates:

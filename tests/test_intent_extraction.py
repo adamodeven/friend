@@ -84,12 +84,12 @@ def test_fallback_task_title_removes_leading_i_need_to_noise():
     assert "submit my scout job application" in result.task.title.lower()
 
 
-def test_high_confidence_add_task_skips_llm_intent_call():
+def test_high_confidence_add_task_still_attempts_llm_before_fallback():
     adapter = _CountingAdapter()
     extractor = IntentExtractor(adapter=adapter)
     result = extractor.extract("i need to submit the application tomorrow morning", "America/New_York")
     assert result.intent == "add_task"
-    assert adapter.json_calls == 0
+    assert adapter.json_calls >= 1
 
 
 def test_llm_extracted_task_title_gets_sanitized():
@@ -114,3 +114,19 @@ def test_llm_extracted_task_title_gets_sanitized():
     assert result.task is not None
     assert result.task.title.lower().startswith("i ") is False
     assert "tomorrow morning" not in result.task.title.lower()
+
+
+def test_fallback_detects_dependency_blocker_language():
+    extractor = IntentExtractor()
+    result = extractor.extract("i keep getting distracted because i need to fix the website first", "America/New_York")
+    assert result.intent in {"update_task", "reflection"}
+    assert result.blockers or result.intent == "reflection"
+
+
+def test_ambiguous_time_sets_clarification_hint():
+    extractor = IntentExtractor()
+    result = extractor.extract("need to send that email later", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.time_reference is not None
+    assert result.time_confidence <= 0.6
+    assert result.needs_clarification is True

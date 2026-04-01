@@ -7,7 +7,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import Reminder, ReminderStatus, ScheduleBlock, Task, TaskStatus
+from app.db.models import PlanningNote, Reminder, ReminderStatus, ScheduleBlock, Task, TaskStatus
 from app.db.repositories.task_repo import create_reminder, has_pending_reminder_within
 
 
@@ -20,7 +20,7 @@ class ReminderEngine:
         if task.status not in (TaskStatus.active, TaskStatus.blocked):
             return None
 
-        next_time = self._next_checkin_time(task=task, now=now)
+        next_time = self._next_checkin_time(session=session, task=task, now=now)
         if self._is_in_block(session, task.user_id, next_time):
             next_time += timedelta(minutes=45)
 
@@ -46,7 +46,7 @@ class ReminderEngine:
         )
         return reminder
 
-    def _next_checkin_time(self, task: Task, now: datetime) -> datetime:
+    def _next_checkin_time(self, *, session: Session, task: Task, now: datetime) -> datetime:
         spacing = timedelta(minutes=self.settings.checkin_default_minutes)
         if task.deadline_at:
             deadline = self._ensure_tz(task.deadline_at, now.tzinfo or timezone.utc)
@@ -59,12 +59,48 @@ class ReminderEngine:
                 spacing = timedelta(minutes=60)
         if task.priority >= 4:
             spacing = min(spacing, timedelta(minutes=40))
+        if task.status == TaskStatus.blocked:
+            spacing = min(spacing, timedelta(minutes=35))
+
+        # Adapt cadence to observed friction while still avoiding spam.
+        multiplier = self._behavior_multiplier(session=session, user_id=task.user_id, now=now)
+        spacing = timedelta(seconds=max(20 * 60, int(spacing.total_seconds() * multiplier)))
+
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = now.replace(hour=23, minute=59, second=59, microsecond=0)
+        if self.daily_reminder_count(session, task.user_id, day_start, day_end) >= 10:
+            spacing += timedelta(minutes=20)
+
         scheduled = now + spacing
 
         hour = scheduled.astimezone(ZoneInfo(self.settings.timezone)).hour
         if self.settings.sleepy_hours_start <= hour < self.settings.sleepy_hours_end:
             scheduled = scheduled + timedelta(hours=(self.settings.sleepy_hours_end - hour))
         return scheduled
+
+    @staticmethod
+    def _behavior_multiplier(*, session: Session, user_id, now: datetime) -> float:
+        lookback_start = now - timedelta(days=14)
+        stmt = (
+            select(PlanningNote)
+            .where(
+                PlanningNote.user_id == user_id,
+                PlanningNote.created_at >= lookback_start,
+                PlanningNote.note_type.in_(("slip_reason", "behavior_pattern")),
+            )
+            .order_by(PlanningNote.created_at.desc())
+            .limit(20)
+        )
+        notes = list(session.execute(stmt).scalars().all())
+        if not notes:
+            return 1.0
+        friction_tokens = ("underestimated", "distracted", "behind", "stuck", "context switching", "conflict")
+        friction_hits = sum(1 for note in notes if any(token in note.content.lower() for token in friction_tokens))
+        if friction_hits >= 6:
+            return 0.72
+        if friction_hits >= 3:
+            return 0.85
+        return 1.0
 
     @staticmethod
     def _ensure_tz(value: datetime, tz) -> datetime:

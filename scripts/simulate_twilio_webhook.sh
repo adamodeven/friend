@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-API_URL="${API_URL:-http://localhost:8000/webhooks/twilio}"
+APP_PORT="${APP_PORT:-8000}"
+API_URL="${API_URL:-http://localhost:${APP_PORT}/webhooks/twilio}"
 FROM_NUMBER="${FROM_NUMBER:-+15555550111}"
 TO_NUMBER="${TO_NUMBER:-+15555550222}"
 MESSAGE_SID="${MESSAGE_SID:-SMLOCAL$(date +%s)}"
@@ -16,4 +17,3 @@ curl -X POST "$API_URL" \
   --data-urlencode "NumMedia=0"
 
 echo
-

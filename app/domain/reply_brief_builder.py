@@ -68,7 +68,9 @@ class ReplyBriefBuilder:
             active_task_context = []
             deadline_context = []
 
-        memory_notes = self._recent_memory_notes(session, user.id)
+        profile_notes = self._profile_bio_notes(user.profile.bio if user.profile else None)
+        recent_notes = self._recent_memory_notes(session, user.id)
+        memory_notes = (profile_notes + recent_notes)[:6]
         state_flags = self._current_state_flags(session, user.id, now)
 
         max_chunks = 2
@@ -147,6 +149,22 @@ class ReplyBriefBuilder:
             .all()
         )
         return [n.content[:220] for n in notes]
+
+    @staticmethod
+    def _profile_bio_notes(bio: str | None) -> list[str]:
+        if not bio:
+            return []
+        notes: list[str] = []
+        for raw in bio.splitlines():
+            line = raw.strip()
+            if not line or not line.startswith("-"):
+                continue
+            clean = line.lstrip("-").strip()
+            if clean:
+                notes.append(clean[:180])
+            if len(notes) >= 3:
+                break
+        return notes
 
     @staticmethod
     def _current_state_flags(session: Session, user_id, now: datetime) -> list[str]:

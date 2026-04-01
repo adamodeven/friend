@@ -59,6 +59,7 @@ class ConversationComposer:
             or self._looks_low_quality(combined, brief.latest_user_message)
             or self._has_parrot_bubble(messages, brief.latest_user_message)
             or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
+            or self._answer_quality_needs_repair(messages, brief)
         )
         if needs_repair:
             repaired = self._repair_low_quality(brief=brief, recent_assistant=recent_assistant)
@@ -376,6 +377,20 @@ class ConversationComposer:
             return False
         first = messages[0].strip()
         return first.endswith("?")
+
+    @staticmethod
+    def _answer_quality_needs_repair(messages: list[str], brief: ReplyBrief) -> bool:
+        if brief.response_goal != "answer_question" or not messages:
+            return False
+        first = messages[0].strip()
+        lowered = first.lower()
+        punctuation = first.count(".") + first.count("?") + first.count("!")
+        if punctuation == 0 and len(first.split()) >= 16:
+            return True
+        direct_markers = ("yes", "yeah", "yep", "no", "nah", "live", "canned", "not canned")
+        if not any(marker in lowered for marker in direct_markers):
+            return True
+        return False
 
     @classmethod
     def _postprocess_messages(cls, messages: list[str], brief: ReplyBrief) -> list[str]:

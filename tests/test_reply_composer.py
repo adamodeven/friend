@@ -183,3 +183,15 @@ def test_answer_postprocess_drops_leading_question_if_still_present():
     assert reply.regenerated_for_repetition is True
     assert "live" in reply.messages[0].lower()
     assert not reply.messages[0].strip().endswith("?")
+
+
+def test_answer_quality_guard_repairs_run_on_direct_answer():
+    adapter = FakeAdapter(
+        ["are we just having one conversation these are live responses from me not canned templates yet i'm on"],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_answer_brief("are these canned responses or live ai generated?"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    assert "not canned" in " ".join(reply.messages).lower() or "live" in " ".join(reply.messages).lower()

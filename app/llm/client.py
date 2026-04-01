@@ -488,7 +488,7 @@ class OllamaAdapter:
             if "temperature" in options:
                 payload["temperature"] = options["temperature"]
             if "num_predict" in options:
-                payload["max_tokens"] = options["num_predict"]
+                payload["max_completion_tokens"] = options["num_predict"]
             if "format" in options and options["format"] == "json":
                 payload["response_format"] = {"type": "json_object"}
         headers = {"Content-Type": "application/json"}
@@ -520,6 +520,7 @@ class OllamaAdapter:
                         error = response.text
                     if "model" in str(error).lower() and "not found" in str(error).lower():
                         return "__model_not_found__"
+                    logger.warning("openai chat request rejected (%s): %s", response.status_code, error)
                     return None
                 response.raise_for_status()
                 data = response.json()

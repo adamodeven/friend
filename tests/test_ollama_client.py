@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from types import SimpleNamespace
 
+from app.llm import client as llm_client
 from app.llm.client import OllamaAdapter
 
 
@@ -315,3 +317,45 @@ def test_openai_insufficient_quota_skips_ollama_fallback_and_stays_in_cooldown()
     assert openai_calls["count"] == 1
     assert ollama_calls["count"] == 0
     assert adapter._openai_cooldown_reason == "insufficient_quota"
+
+
+def test_openai_chat_completion_uses_max_completion_tokens_for_num_predict(monkeypatch) -> None:
+    adapter = _openai_adapter_for_test()
+    captured: dict[str, object] = {}
+
+    class _Client:
+        def __init__(self, *, timeout=None) -> None:  # noqa: ANN001
+            self.timeout = timeout
+
+        def __enter__(self):  # noqa: ANN204
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001,ANN204
+            return False
+
+        def post(self, url: str, json: dict, headers: dict):  # noqa: ANN001,ANN201
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            def _raise_for_status() -> None:
+                return None
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: {"choices": [{"message": {"content": "ok"}}]},
+                raise_for_status=_raise_for_status,
+            )
+
+    monkeypatch.setattr(llm_client.httpx, "Client", _Client)
+
+    result = adapter._openai_chat_completion(
+        system="s",
+        user="u",
+        model="gpt-5.4-mini",
+        options={"num_predict": 77},
+    )
+
+    assert result == "ok"
+    payload = captured["json"]
+    assert isinstance(payload, dict)
+    assert payload.get("max_completion_tokens") == 77
+    assert "max_tokens" not in payload

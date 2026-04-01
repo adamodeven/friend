@@ -231,6 +231,16 @@ def test_short_checkin_repair_rejects_task_timeline_drift():
     assert "review" not in lowered
 
 
+def test_short_checkin_repair_rejects_routine_drift_question():
+    adapter = FakeAdapter(["yo whatup why did u wanna change my routine?"], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("yo whatup", short_checkin=True))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "routine" not in lowered
+
+
 def test_acknowledge_new_task_repair_requires_capture_or_next_move_markers():
     adapter = FakeAdapter(["submit your scout job app before morning"], enabled=True)
     composer = ConversationComposer(adapter=adapter)
@@ -246,6 +256,25 @@ def test_acknowledge_new_task_repair_requires_capture_or_next_move_markers():
     assert reply.regenerated_for_repetition is True
     lowered = " ".join(reply.messages).lower()
     assert "next move:" in lowered or "got it" in lowered or "locked in" in lowered or "captured" in lowered
+
+
+def test_acknowledge_new_task_repairs_conjunction_lead_and_submit_duplication():
+    adapter = FakeAdapter(["and Submit your scout job application for review. Submit i need to finish proofreading."], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="acknowledge_new_task",
+            latest_user_message="and then tmr morning i need to submit my scout job application",
+            suggested_next_step="do a final proofread, then submit scout job application",
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert lowered.startswith("and ") is False
+    assert "submit i submit" not in lowered
+    assert "next move:" in lowered or "captured" in lowered
 
 
 def test_composer_repairs_when_output_leaks_instructional_phrase():

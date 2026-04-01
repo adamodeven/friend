@@ -281,6 +281,9 @@ class ConversationComposer:
                 text = f"{opening} i'm live and tracking this."
         elif brief.is_short_checkin:
             text = f"{opening} i'm here. what's the main move right now?"
+        elif brief.response_goal == "acknowledge_new_task":
+            step = brief.suggested_next_step or "what's the first concrete step?"
+            text = f"{opening} captured. next move: {step}"
         elif brief.response_goal == "react_to_progress":
             step = brief.suggested_next_step or "what's the next concrete step?"
             text = f"{opening} that's real progress. {step}"
@@ -607,7 +610,13 @@ class ConversationComposer:
                 return True
             if re.search(r"^\s*[a-z_]+\s*:\s*[a-z_]+\s*:", combined):
                 return True
-            if "captured" not in combined and "next move" not in combined and "submit" not in combined and "deadline" not in combined:
+            if combined.startswith("and "):
+                return True
+            if re.search(r"\bsubmit\s+i\s+submit\b", combined):
+                return True
+            if brief.should_push_for_action and brief.suggested_next_step and "next move" not in combined:
+                return True
+            if "captured" not in combined and "next move" not in combined:
                 return True
 
         if brief.response_goal == "open_conversation":
@@ -618,10 +627,59 @@ class ConversationComposer:
                     return True
                 if any(token in combined for token in ["tomorrow", "deadline", "submit", "review", "application"]):
                     return True
+                if cls._short_checkin_semantic_drift(response_text=combined, user_text=brief.latest_user_message):
+                    return True
             lowered_user = brief.latest_user_message.lower()
             if "what i do" in combined and not any(token in lowered_user for token in ["what do", "what can", "are you", "do you"]):
                 return True
 
+        return False
+
+    @classmethod
+    def _short_checkin_semantic_drift(cls, *, response_text: str, user_text: str) -> bool:
+        lowered = response_text.lower()
+        if any(token in lowered for token in ["routine", "operations", "company", "submission", "application"]):
+            return True
+        if lowered.startswith("why "):
+            return True
+
+        user_words = set(cls._normalize_text(user_text).split())
+        response_words = cls._normalize_text(response_text).split()
+        if not response_words:
+            return True
+        allowlist = {
+            "yo",
+            "hey",
+            "hi",
+            "sup",
+            "whatup",
+            "whatsup",
+            "there",
+            "here",
+            "live",
+            "online",
+            "locked",
+            "in",
+            "got",
+            "you",
+            "im",
+            "i",
+            "m",
+            "what",
+            "s",
+            "the",
+            "move",
+            "right",
+            "now",
+            "good",
+            "all",
+            "set",
+        }
+        novel = [word for word in response_words if word not in user_words and word not in allowlist]
+        if len(response_words) <= 12 and len(novel) >= 4:
+            return True
+        if len(response_words) <= 20 and len(novel) >= 6:
+            return True
         return False
 
     @staticmethod

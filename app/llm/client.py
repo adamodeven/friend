@@ -16,23 +16,39 @@ class OllamaAdapter:
     def __init__(self) -> None:
         settings = get_settings()
         self._settings = settings
-        self._text_model = settings.ollama_text_model
-        self._fallback_text_model = settings.ollama_fallback_text_model.strip()
-        self._vision_model = settings.ollama_vision_model
-        self._base_url = settings.ollama_base_url.rstrip("/")
-        self._timeout_seconds = float(settings.ollama_timeout_seconds)
+        self._provider = settings.llm_provider.lower().strip()
         self._keep_alive = settings.ollama_keep_alive
         self._auto_pull_missing_models = settings.ollama_auto_pull_missing_models
         self._native_api_available: bool | None = None
         self._openai_compat_available: bool | None = None
+
+        if self._provider == "openai":
+            self._text_model = settings.openai_text_model
+            self._fallback_text_model = settings.openai_fallback_text_model.strip()
+            self._vision_model = settings.openai_vision_model
+            self._base_url = settings.openai_base_url.rstrip("/")
+            self._timeout_seconds = float(settings.openai_timeout_seconds)
+            self._api_key = settings.openai_api_key.strip()
+            self._default_options: dict[str, Any] = {}
+            self._enabled = bool(self._api_key)
+            if not self._enabled:
+                logger.warning("LLM provider=openai but OPENAI_API_KEY is empty; LLM responses are disabled")
+        else:
+            self._text_model = settings.ollama_text_model
+            self._fallback_text_model = settings.ollama_fallback_text_model.strip()
+            self._vision_model = settings.ollama_vision_model
+            self._base_url = settings.ollama_base_url.rstrip("/")
+            self._timeout_seconds = float(settings.ollama_timeout_seconds)
+            self._api_key = ""
+            self._default_options = self._build_default_options(settings)
+            self._enabled = self._provider == "ollama"
+
         self._timeout = httpx.Timeout(
             connect=min(5.0, self._timeout_seconds),
             read=self._timeout_seconds,
             write=20.0,
             pool=5.0,
         )
-        self._default_options = self._build_default_options(settings)
-        self._enabled = settings.llm_provider.lower() == "ollama"
 
     @property
     def enabled(self) -> bool:
@@ -48,6 +64,24 @@ class OllamaAdapter:
         request_timeout_seconds: float | None = None,
     ) -> dict[str, Any] | None:
         if not self._enabled:
+            return None
+        if self._provider == "openai":
+            candidates = self._text_model_candidates(model)
+            per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
+            for candidate in candidates:
+                content = self._openai_chat_completion(
+                    system=system,
+                    user=user,
+                    model=candidate,
+                    options={**(options or {}), "format": "json"},
+                    request_timeout_seconds=per_attempt_timeout,
+                )
+                if content == "__model_not_found__":
+                    continue
+                if content:
+                    parsed = self._parse_json(content)
+                    if isinstance(parsed, dict):
+                        return parsed
             return None
         candidates = self._text_model_candidates(model)
         per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
@@ -122,6 +156,22 @@ class OllamaAdapter:
     ) -> str | None:
         if not self._enabled:
             return None
+        if self._provider == "openai":
+            candidates = self._text_model_candidates(model)
+            per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
+            for candidate in candidates:
+                content = self._openai_chat_completion(
+                    system=system,
+                    user=user,
+                    model=candidate,
+                    options=options,
+                    request_timeout_seconds=per_attempt_timeout,
+                )
+                if content == "__model_not_found__":
+                    continue
+                if content:
+                    return content
+            return None
         candidates = self._text_model_candidates(model)
         per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
         saw_native_404 = False
@@ -187,6 +237,25 @@ class OllamaAdapter:
             return None
         image_b64 = self._download_image_as_base64(image_url, request_timeout_seconds=request_timeout_seconds)
         if not image_b64:
+            return None
+        if self._provider == "openai":
+            candidates = self._text_model_candidates(self._vision_model)
+            per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
+            for candidate in candidates:
+                content = self._openai_chat_completion(
+                    system=system,
+                    user=user_prompt,
+                    model=candidate,
+                    options={"format": "json"},
+                    images=[image_b64],
+                    request_timeout_seconds=per_attempt_timeout,
+                )
+                if content == "__model_not_found__":
+                    continue
+                if content:
+                    parsed = self._parse_json(content)
+                    if isinstance(parsed, dict):
+                        return parsed
             return None
         payload = {
             "model": self._vision_model,
@@ -314,13 +383,18 @@ class OllamaAdapter:
                 payload["max_tokens"] = options["num_predict"]
             if "format" in options and options["format"] == "json":
                 payload["response_format"] = {"type": "json_object"}
+        headers = {"Content-Type": "application/json"}
+        if self._provider == "openai":
+            headers["Authorization"] = f"Bearer {self._api_key}"
         try:
             with httpx.Client(timeout=self._timeout_for(request_timeout_seconds)) as client:
-                response = client.post(url, json=payload)
-                if response.status_code == 404:
+                response = client.post(url, json=payload, headers=headers)
+                if response.status_code in (400, 404):
                     self._openai_compat_available = False
                     try:
-                        error = (response.json() or {}).get("error", "")
+                        error_payload = response.json() or {}
+                        error_obj = error_payload.get("error", {})
+                        error = error_obj.get("message", "") if isinstance(error_obj, dict) else str(error_obj)
                     except Exception:
                         error = response.text
                     if "model" in str(error).lower() and "not found" in str(error).lower():
@@ -342,7 +416,7 @@ class OllamaAdapter:
                 return merged or None
             return None
         except Exception as exc:  # pragma: no cover
-            logger.exception("ollama openai-compat chat failed: %s", exc)
+            logger.exception("chat completion failed provider=%s: %s", self._provider, exc)
             return None
 
     def _openai_chat_url(self) -> str:

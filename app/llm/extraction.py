@@ -13,6 +13,11 @@ class IntentExtractor:
     def __init__(self, adapter: OllamaAdapter | None = None) -> None:
         self.adapter = adapter or OllamaAdapter()
         self.settings = get_settings()
+        provider = self.settings.llm_provider.lower().strip()
+        if provider == "openai":
+            self._intent_model = self.settings.openai_intent_model.strip() or None
+        else:
+            self._intent_model = self.settings.ollama_intent_model.strip() or None
 
     def extract(self, text: str, timezone: str) -> IntentResult:
         fallback = self._extract_fallback(text, timezone)
@@ -44,7 +49,7 @@ class IntentExtractor:
                 "num_predict": self.settings.ollama_intent_num_predict,
                 "num_ctx": self.settings.ollama_intent_num_ctx,
             },
-            model=self.settings.ollama_intent_model.strip() or None,
+            model=self._intent_model,
             request_timeout_seconds=8,
         )
         if not payload:

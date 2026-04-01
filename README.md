@@ -63,7 +63,11 @@ python3 -m pip install -e '.[dev]'
 ```
 4. Start core services for local app/worker run:
 ```bash
-docker compose up -d postgres redis ollama ollama-init
+docker compose up -d postgres redis
+```
+If `LLM_PROVIDER=ollama`, also start:
+```bash
+docker compose up -d ollama ollama-init
 ```
 5. Run migrations:
 ```bash
@@ -126,7 +130,24 @@ https://<your-domain>/webhooks/twilio
 - `TWILIO_TO_NUMBER` (your personal number for one-user mode)
 - `TWILIO_VALIDATE_SIGNATURE=false` (recommended behind reverse proxy for MVP)
 
-## 6) Ollama Setup
+## 6) Provider Setup (Default: OpenAI)
+
+This repo now defaults to `LLM_PROVIDER=openai`.
+
+### OpenAI setup (recommended default)
+
+- `LLM_PROVIDER=openai`
+- Set `OPENAI_API_KEY`
+- Keep `OPENAI_BASE_URL=https://api.openai.com/v1` unless you use a compatible gateway
+- Suggested model split:
+  - `OPENAI_INTENT_MODEL=gpt-5.4-nano`
+  - `OPENAI_COMPOSER_MODEL=gpt-5.4-mini`
+  - `OPENAI_TEXT_MODEL=gpt-5.4-mini`
+  - `OPENAI_FALLBACK_TEXT_MODEL=gpt-5.4-nano`
+  - `OPENAI_VISION_MODEL=gpt-5.4-mini`
+- `OPENAI_TIMEOUT_SECONDS=45`
+
+### Ollama setup (optional, still fully supported)
 
 - `LLM_PROVIDER=ollama`
 - For Docker stack services, `OLLAMA_BASE_URL=http://ollama:11434`
@@ -280,6 +301,21 @@ Required for production:
 - `TWILIO_FROM_NUMBER`
 - `TWILIO_TO_NUMBER`
 - `LLM_PROVIDER`
+- `WORKER_CONCURRENCY`
+- `ADMIN_TOKEN`
+- `USER_PHONE_NUMBER`
+
+If `LLM_PROVIDER=openai`:
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+- `OPENAI_TEXT_MODEL`
+- `OPENAI_INTENT_MODEL`
+- `OPENAI_COMPOSER_MODEL`
+- `OPENAI_FALLBACK_TEXT_MODEL`
+- `OPENAI_VISION_MODEL`
+- `OPENAI_TIMEOUT_SECONDS`
+
+If `LLM_PROVIDER=ollama`:
 - `OLLAMA_BASE_URL`
 - `OLLAMA_TEXT_MODEL`
 - `OLLAMA_FALLBACK_TEXT_MODEL`
@@ -299,9 +335,6 @@ Required for production:
 - `NVIDIA_DRIVER_CAPABILITIES`
 - `OLLAMA_INTENT_NUM_CTX`
 - `OLLAMA_INTENT_NUM_PREDICT`
-- `WORKER_CONCURRENCY`
-- `ADMIN_TOKEN`
-- `USER_PHONE_NUMBER`
 
 Recommended:
 - `TIMEZONE`

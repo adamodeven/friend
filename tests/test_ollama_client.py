@@ -6,6 +6,7 @@ from app.llm.client import OllamaAdapter
 def _adapter_for_test() -> OllamaAdapter:
     adapter = object.__new__(OllamaAdapter)
     adapter._enabled = True
+    adapter._provider = "ollama"
     adapter._text_model = "slow-model"
     adapter._fallback_text_model = "fast-model"
     adapter._keep_alive = "30m"
@@ -13,7 +14,22 @@ def _adapter_for_test() -> OllamaAdapter:
     adapter._native_api_available = None
     adapter._openai_compat_available = None
     adapter._base_url = "http://ollama:11434"
+    adapter._api_key = ""
     adapter._default_options = {}
+    return adapter
+
+
+def _openai_adapter_for_test() -> OllamaAdapter:
+    adapter = object.__new__(OllamaAdapter)
+    adapter._enabled = True
+    adapter._provider = "openai"
+    adapter._text_model = "openai-slow"
+    adapter._fallback_text_model = "openai-fast"
+    adapter._vision_model = "openai-vision"
+    adapter._base_url = "https://api.openai.com/v1"
+    adapter._api_key = "sk-test"
+    adapter._default_options = {}
+    adapter._timeout = None
     return adapter
 
 
@@ -128,3 +144,49 @@ def test_text_completion_merges_runtime_defaults_with_call_options():
         "temperature": 0.4,
         "num_predict": 20,
     }
+
+
+def test_openai_provider_text_completion_uses_model_fallback_chain():
+    adapter = _openai_adapter_for_test()
+    calls: list[str] = []
+
+    def fake_openai_chat_completion(  # noqa: ANN001
+        *,
+        system,
+        user,
+        model,
+        options=None,
+        images=None,
+        request_timeout_seconds=None,
+    ):
+        calls.append(model)
+        if model == "openai-slow":
+            return None
+        return "openai live reply"
+
+    adapter._openai_chat_completion = fake_openai_chat_completion  # type: ignore[attr-defined]
+
+    result = adapter.text_completion(system="s", user="u", request_timeout_seconds=20)
+    assert result == "openai live reply"
+    assert calls == ["openai-slow", "openai-fast"]
+
+
+def test_openai_provider_json_completion_parses_payload():
+    adapter = _openai_adapter_for_test()
+
+    def fake_openai_chat_completion(  # noqa: ANN001
+        *,
+        system,
+        user,
+        model,
+        options=None,
+        images=None,
+        request_timeout_seconds=None,
+    ):
+        return '{"intent":"add_task","confidence":0.81}'
+
+    adapter._openai_chat_completion = fake_openai_chat_completion  # type: ignore[attr-defined]
+
+    result = adapter.json_completion(system="s", user="u", request_timeout_seconds=20)
+    assert result is not None
+    assert result["intent"] == "add_task"

@@ -20,7 +20,17 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
 
-    llm_provider: str = "ollama"
+    llm_provider: str = "openai"
+
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_text_model: str = "gpt-5.4-mini"
+    openai_intent_model: str = "gpt-5.4-nano"
+    openai_composer_model: str = "gpt-5.4-mini"
+    openai_fallback_text_model: str = "gpt-5.4-nano"
+    openai_vision_model: str = "gpt-5.4-mini"
+    openai_timeout_seconds: int = 45
+
     ollama_base_url: str = "http://localhost:11434"
     ollama_text_model: str = "llama3.2:1b"
     ollama_intent_model: str = ""

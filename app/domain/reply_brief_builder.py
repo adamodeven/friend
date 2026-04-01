@@ -46,8 +46,16 @@ class ReplyBriefBuilder:
         for task in upcoming:
             if not task.deadline_at:
                 continue
-            due = task.deadline_at.astimezone(ZoneInfo(user.timezone)).strftime("%a %-m/%-d %-I:%M%p").lower()
-            deadline_context.append(f"{task.title} due {due}")
+                due = task.deadline_at.astimezone(ZoneInfo(user.timezone)).strftime("%a %-m/%-d %-I:%M%p").lower()
+                deadline_context.append(f"{task.title} due {due}")
+
+        # Keep capability/meta replies conversational and avoid unnecessary task-context bleed.
+        lowered_message = latest_user_message.lower()
+        if outcome.response_goal == "answer_question" and not any(
+            token in lowered_message for token in ["task", "deadline", "due", "plan", "project", "week", "today", "tonight"]
+        ):
+            active_task_context = []
+            deadline_context = []
 
         memory_notes = self._recent_memory_notes(session, user.id)
         state_flags = self._current_state_flags(session, user.id, now)
@@ -109,4 +117,3 @@ class ReplyBriefBuilder:
             .all()
         )
         return [f"{b.block_type} until {b.ends_at.isoformat()}" for b in blocks]
-

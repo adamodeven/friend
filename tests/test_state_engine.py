@@ -48,3 +48,16 @@ def test_status_query_meta_gets_direct_explanation(db_session):
     assert outcome.response_goal == "answer_question"
     assert any("live-generated" in fact or "live" in fact for fact in outcome.key_facts_to_include)
     assert any("user asked:" in fact for fact in outcome.key_facts_to_include)
+
+
+def test_status_query_live_now_includes_direct_status_fact(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    engine = StateEngine()
+    intent = IntentResult(intent="status_query", confidence=0.9)
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="are you actually live now?",
+    )
+    assert any("yes, i'm live right now" in fact for fact in outcome.key_facts_to_include)

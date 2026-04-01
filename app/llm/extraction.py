@@ -143,11 +143,26 @@ class IntentExtractor:
     @staticmethod
     def _is_meta_or_capability_query(text: str) -> bool:
         capability_cues = {"what", "how", "help", "do", "can", "are", "is"}
-        identity_cues = {"you", "bot", "ai", "automated", "work", "responses", "generated", "capabilities"}
+        identity_cues = {
+            "you",
+            "bot",
+            "ai",
+            "automated",
+            "work",
+            "working",
+            "live",
+            "online",
+            "on",
+            "responses",
+            "generated",
+            "capabilities",
+        }
         words = set(re.findall(r"[a-z0-9']+", text))
         if not words:
             return False
         if "?" in text and words.intersection(capability_cues) and words.intersection(identity_cues):
+            return True
+        if re.search(r"\bare you\b.*\b(live|working|online|on)\b", text):
             return True
         return "what do you do" in text or "what can you do" in text
 

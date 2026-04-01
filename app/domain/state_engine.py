@@ -185,6 +185,8 @@ class StateEngine:
                 outcome.key_facts_to_include.append("be direct about whether this reply is live-generated right now")
             if "work" in lowered or "working" in lowered:
                 outcome.key_facts_to_include.append("confirm current system status plainly")
+            if any(token in lowered for token in ["live", "working", "online", "on now"]):
+                outcome.key_facts_to_include.append("yes, i'm live right now and i received this message")
             outcome.key_facts_to_include.append(f"user asked: {raw_text[:180]}")
             outcome.should_ask_question = False
 

@@ -4,7 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from app.db.models import User
+from app.db.models import Task, TaskStatus, User
 from app.domain.reply_brief_builder import ReplyBriefBuilder
 from app.schemas.reply import StateOutcome
 
@@ -37,3 +37,26 @@ def test_reply_brief_goal_reflects_outcome(db_session):
     assert task_brief.response_goal == "acknowledge_new_task"
     assert timeline_brief.max_chunks >= task_brief.max_chunks
 
+
+def test_meta_question_brief_omits_task_context(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    db_session.add(
+        Task(
+            user_id=user.id,
+            title="Finish CAD",
+            status=TaskStatus.active,
+            priority=2,
+        )
+    )
+    db_session.commit()
+
+    builder = ReplyBriefBuilder()
+    outcome = StateOutcome(response_goal="answer_question", key_facts_to_include=["user asked: are you live now?"])
+    brief = builder.build(
+        db_session,
+        user=user,
+        latest_user_message="are you actually live now?",
+        outcome=outcome,
+    )
+    assert brief.active_task_context == []
+    assert brief.deadline_context == []

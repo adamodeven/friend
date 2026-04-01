@@ -319,6 +319,7 @@ class ConversationComposer:
         return (
             self._looks_internal_or_robotic(combined)
             or self._looks_low_quality(combined, brief.latest_user_message)
+            or self._has_scaffolding_preface(messages)
             or self._has_parrot_bubble(messages, brief.latest_user_message)
             or self._has_nonsequitur_for_short_checkin(messages, brief)
             or self._goal_alignment_needs_repair(messages, brief)
@@ -387,13 +388,20 @@ class ConversationComposer:
     @classmethod
     def _looks_low_quality(cls, candidate: str, latest_user_message: str) -> bool:
         lowered = candidate.lower().strip()
-        if any(token in lowered for token in cls._quality_banned_openers()):
+        folded = lowered.replace("’", "'").replace("`", "'")
+        if any(token in folded for token in cls._quality_banned_openers()):
             return True
-        if cls._looks_hard_structured_leak(lowered):
+        if re.search(r"\bhere.?s\s+the\s+response\b", folded):
+            return True
+        if cls._looks_hard_structured_leak(folded):
             return True
         if re.search(r"(^|\n)\s*(#{1,6}|\*\*|\*\s+|-\s+|\d+\.)", candidate):
             return True
         if re.search(r"^\s*[a-z_]+\s*:\s*[a-z_]+\s*:", lowered):
+            return True
+        if re.search(r"\b[a-z_]+\s*=\s*\([^)]{0,80}\)", lowered):
+            return True
+        if re.search(r"\b(user_message|tasks|deadlines|next_step|goal|tone|urgency)\s*=", lowered):
             return True
         if "```" in candidate:
             return True
@@ -497,6 +505,9 @@ class ConversationComposer:
         if not messages:
             return messages
         messages = [cls._strip_wrapping_quotes(m) for m in messages]
+        messages = cls._drop_scaffolding_preface(messages)
+        if not messages:
+            return messages
         first = messages[0].strip()
         user_norm = cls._normalize_text(brief.latest_user_message)
         first_norm = cls._normalize_text(first)
@@ -506,6 +517,28 @@ class ConversationComposer:
         if brief.response_goal == "answer_question" and first.endswith("?") and len(messages) > 1:
             return messages[1:]
         return messages
+
+    @classmethod
+    def _drop_scaffolding_preface(cls, messages: list[str]) -> list[str]:
+        if not messages:
+            return messages
+        first = messages[0].strip()
+        if cls._is_scaffolding_preface(first):
+            return messages[1:]
+        return messages
+
+    @staticmethod
+    def _is_scaffolding_preface(text: str) -> bool:
+        lowered = text.lower().strip().replace("’", "'").replace("`", "'")
+        compact = re.sub(r"[^a-z0-9\s:]", " ", lowered)
+        compact = " ".join(compact.split())
+        if not compact:
+            return False
+        if re.fullmatch(r"here'?s the response:?", compact):
+            return True
+        if re.fullmatch(r"(response|reply):?", compact):
+            return True
+        return False
 
     @staticmethod
     def _strip_wrapping_quotes(text: str) -> str:
@@ -546,6 +579,12 @@ class ConversationComposer:
             "task graph",
         ]
         return any(marker in combined for marker in markers)
+
+    @classmethod
+    def _has_scaffolding_preface(cls, messages: list[str]) -> bool:
+        if not messages:
+            return False
+        return cls._is_scaffolding_preface(messages[0])
 
     @classmethod
     def _goal_alignment_needs_repair(cls, messages: list[str], brief: ReplyBrief) -> bool:

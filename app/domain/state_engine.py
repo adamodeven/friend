@@ -77,8 +77,9 @@ class StateEngine:
                 outcome.key_facts_to_include.append(f"check-in scheduled around {scheduled}")
 
             outcome.should_push_for_action = True
-            outcome.suggested_next_step = intent.task.next_step or self._default_next_step(task.title)
-            if self._should_offer_checkpoints(task_title=task.title, raw_text=raw_text, suggested_next_step=intent.task.next_step):
+            resolved_next_step = intent.task.next_step or self._default_next_step(task.title)
+            outcome.suggested_next_step = resolved_next_step
+            if self._should_offer_checkpoints(task_title=task.title, raw_text=raw_text, suggested_next_step=resolved_next_step):
                 outcome.question_if_needed = "want me to break that into 2 quick checkpoints?"
                 outcome.should_ask_question = True
             else:

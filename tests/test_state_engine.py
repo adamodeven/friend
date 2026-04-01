@@ -46,4 +46,5 @@ def test_status_query_meta_gets_direct_explanation(db_session):
         raw_text="are these canned responses or live ai generated?",
     )
     assert outcome.response_goal == "answer_question"
-    assert any("deterministic" in fact for fact in outcome.key_facts_to_include)
+    assert any("live-generated" in fact or "live" in fact for fact in outcome.key_facts_to_include)
+    assert any("user asked:" in fact for fact in outcome.key_facts_to_include)

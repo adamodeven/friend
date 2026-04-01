@@ -90,3 +90,18 @@ def test_composer_keeps_single_llm_attempt_path():
     assert adapter.calls == 0
     assert reply.used_fallback is False
     assert len(reply.messages) >= 1
+
+
+def test_composer_regenerates_when_internal_phrase_leaks():
+    adapter = FakeAdapter(
+        [
+            "open conversational message received",
+            "yeah i'm live. i saw your text. what's the move?",
+        ],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("is this thing on?"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    assert "open conversational message received" not in " ".join(reply.messages).lower()

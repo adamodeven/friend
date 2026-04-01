@@ -17,6 +17,7 @@ class OllamaAdapter:
         settings = get_settings()
         self._settings = settings
         self._text_model = settings.ollama_text_model
+        self._fallback_text_model = settings.ollama_fallback_text_model.strip()
         self._vision_model = settings.ollama_vision_model
         self._base_url = settings.ollama_base_url.rstrip("/")
         self._timeout_seconds = float(settings.ollama_timeout_seconds)
@@ -44,22 +45,25 @@ class OllamaAdapter:
     ) -> dict[str, Any] | None:
         if not self._enabled:
             return None
-        payload_generate = {
-            "model": model or self._text_model,
-            "stream": False,
-            "format": "json",
-            "prompt": f"{system}\n\n{user}",
-            "keep_alive": self._keep_alive,
-        }
-        if options:
-            payload_generate["options"] = options
-        content = self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
-        if content == "__generate_404__":
-            content = None
-        if content:
-            parsed = self._parse_json(content)
-            if isinstance(parsed, dict):
-                return parsed
+        candidates = self._text_model_candidates(model)
+        per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
+        for candidate in candidates:
+            payload_generate = {
+                "model": candidate,
+                "stream": False,
+                "format": "json",
+                "prompt": f"{system}\n\n{user}",
+                "keep_alive": self._keep_alive,
+            }
+            if options:
+                payload_generate["options"] = options
+            content = self._generate_content(payload_generate, request_timeout_seconds=per_attempt_timeout)
+            if content == "__generate_404__":
+                continue
+            if content:
+                parsed = self._parse_json(content)
+                if isinstance(parsed, dict):
+                    return parsed
         return None
 
     def text_completion(
@@ -73,17 +77,20 @@ class OllamaAdapter:
     ) -> str | None:
         if not self._enabled:
             return None
-        payload_generate = {
-            "model": model or self._text_model,
-            "stream": False,
-            "prompt": f"{system}\n\n{user}",
-            "keep_alive": self._keep_alive,
-        }
-        if options:
-            payload_generate["options"] = options
-        content = self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
-        if content and content != "__generate_404__":
-            return content
+        candidates = self._text_model_candidates(model)
+        per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
+        for candidate in candidates:
+            payload_generate = {
+                "model": candidate,
+                "stream": False,
+                "prompt": f"{system}\n\n{user}",
+                "keep_alive": self._keep_alive,
+            }
+            if options:
+                payload_generate["options"] = options
+            content = self._generate_content(payload_generate, request_timeout_seconds=per_attempt_timeout)
+            if content and content != "__generate_404__":
+                return content
         return None
 
     def vision_json(
@@ -178,6 +185,21 @@ class OllamaAdapter:
             write=min(8.0, total),
             pool=3.0,
         )
+
+    def _text_model_candidates(self, model: str | None) -> list[str]:
+        primary = (model or self._text_model).strip()
+        candidates = [primary]
+        fallback = self._fallback_text_model.strip() if self._fallback_text_model else ""
+        if fallback and fallback not in candidates:
+            candidates.append(fallback)
+        return candidates
+
+    @staticmethod
+    def _per_attempt_timeout(total_timeout: float | None, attempts: int) -> float | None:
+        if total_timeout is None:
+            return None
+        safe_attempts = max(1, attempts)
+        return max(8.0, float(total_timeout) / safe_attempts)
 
     @staticmethod
     def _parse_json(text: str) -> Any:

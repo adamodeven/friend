@@ -22,7 +22,8 @@ class Settings(BaseSettings):
 
     llm_provider: str = "ollama"
     ollama_base_url: str = "http://localhost:11434"
-    ollama_text_model: str = "llama3.2:3b"
+    ollama_text_model: str = "llama3.2:1b"
+    ollama_fallback_text_model: str = "llama3.2:1b"
     ollama_vision_model: str = "llava:13b"
     ollama_timeout_seconds: int = 45
     ollama_keep_alive: str = "30m"

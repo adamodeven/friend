@@ -180,16 +180,17 @@ class StateEngine:
         elif intent.intent == "status_query":
             outcome.response_goal = "answer_question"
             outcome.emotional_tone = "casual"
-            outcome.key_facts_to_include.append(
-                "you can text naturally and i'll track tasks, deadlines, blockers, and reminders without commands"
-            )
-            outcome.key_facts_to_include.append("state/scheduling logic is deterministic; wording is generated each reply")
+            lowered = raw_text.lower()
+            if "canned" in lowered or "live" in lowered or "generated" in lowered:
+                outcome.key_facts_to_include.append("be direct about whether this reply is live-generated right now")
+            if "work" in lowered or "working" in lowered:
+                outcome.key_facts_to_include.append("confirm current system status plainly")
+            outcome.key_facts_to_include.append(f"user asked: {raw_text[:180]}")
             outcome.should_ask_question = False
 
         else:
-            outcome.response_goal = "open_conversation"
+            outcome.response_goal = "answer_question" if "?" in raw_text else "open_conversation"
             outcome.emotional_tone = "casual"
-            outcome.key_facts_to_include.append("open conversational message received")
             outcome.should_push_for_action = False
 
         self._update_profile_memory(session, user.id, raw_text)
@@ -272,4 +273,3 @@ class StateEngine:
             prefs = dict(profile.planning_preferences)
             prefs["last_update_at"] = datetime.now(tz=timezone.utc).isoformat()
             profile.planning_preferences = prefs
-

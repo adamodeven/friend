@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import hashlib
 
 from app.llm.client import OllamaAdapter
@@ -39,63 +38,97 @@ class ConversationComposer:
         if not self.adapter.enabled:
             return None, False
 
-        messages = self._generate_messages(brief=brief, avoid_phrases=[])
+        regenerated = False
+        avoid_phrases = self.repetition_guard.avoid_phrases(recent_assistant, limit=4)
+        messages = self._generate_messages(brief=brief, avoid_phrases=avoid_phrases, strict=False)
         if not messages:
             return None, False
 
         combined = " ".join(messages)
+        if self._looks_internal_or_robotic(combined):
+            retry = self._generate_messages(
+                brief=brief,
+                avoid_phrases=avoid_phrases + self._quality_banned_openers(),
+                strict=True,
+            )
+            if retry:
+                messages = retry
+                combined = " ".join(messages)
+                regenerated = True
+
+        combined = " ".join(messages)
         if self.repetition_guard.is_too_similar(combined, recent_assistant):
             messages[-1] = self._force_distinct_tail(messages[-1], brief)
-            return messages, True
-        return messages, False
+            regenerated = True
+        return messages, regenerated
 
-    def _generate_messages(self, *, brief: ReplyBrief, avoid_phrases: list[str]) -> list[str] | None:
+    def _generate_messages(self, *, brief: ReplyBrief, avoid_phrases: list[str], strict: bool) -> list[str] | None:
         payload = self._model_payload(brief=brief, avoid_phrases=avoid_phrases)
         # Keep compose to one LLM call for predictable latency under local CPU inference.
         text = self.adapter.text_completion(
-            system=self._system_prompt(),
+            system=self._system_prompt(strict=strict),
             user=payload,
-            options={"temperature": 0.6, "num_predict": 90},
-            request_timeout_seconds=40,
+            options={"temperature": 0.72 if not strict else 0.55, "num_predict": 120},
+            request_timeout_seconds=30,
         )
         return self._extract_messages_from_text(text)
 
     @staticmethod
-    def _system_prompt() -> str:
+    def _system_prompt(*, strict: bool) -> str:
+        strict_rules = (
+            "Do not mention internal labels like intent, response_goal, parser, composer, fallback, or glitches. "
+            "Do not say 'open conversational message received' or anything similar."
+            if strict
+            else ""
+        )
         return (
             "You write outbound SMS replies for a personal execution manager. "
             "Sound like a real person texting: casual, modern, sharp, socially fluent, concise. "
             "Never robotic, corporate, therapist-y, or generic productivity-bot language. "
+            "If user asks what you do or whether replies are canned/live, answer directly in plain language first. "
             "No em dashes, no markdown, no labels, no numbering. "
             "Answer what the user actually said, in context, and keep momentum. "
             "Use 1-3 message bubbles max, each short. "
-            "Output plain text only. If multiple bubbles, separate them with one blank line."
+            "Output plain text only. If multiple bubbles, separate them with one blank line. "
+            f"{strict_rules}"
         )
 
     def _model_payload(self, *, brief: ReplyBrief, avoid_phrases: list[str]) -> str:
-        compact = {
-            "latest_user_message": brief.latest_user_message,
-            "response_goal": brief.response_goal,
-            "operational_reason": brief.operational_reason,
-            "urgency_level": brief.urgency_level,
-            "style_mode": brief.style_mode,
-            "key_facts": brief.key_facts_to_include[:3],
-            "question_if_needed": brief.question_if_needed,
-            "suggested_next_step": brief.suggested_next_step,
-            "active_tasks": brief.active_task_context[:2],
-            "deadlines": brief.deadline_context[:2],
-            "state_flags": brief.current_state_flags[:2],
-            "memory_notes": brief.memory_notes[:1],
-            "recent_thread": brief.recent_thread[-3:],
-            "constraints": {
-                "max_chunks": brief.max_chunks,
-                "max_chunk_length": brief.max_chunk_length,
-                "avoid_phrases": avoid_phrases,
-                "must_answer_latest_message": True,
-                "should_sound_human": True,
-            },
-        }
-        return json.dumps(compact, ensure_ascii=True)
+        recent_thread = brief.recent_thread[-6:] or ["(no prior thread)"]
+        key_facts = brief.key_facts_to_include[:4] or ["(none)"]
+        tasks = brief.active_task_context[:3] or ["(none)"]
+        deadlines = brief.deadline_context[:3] or ["(none)"]
+        flags = brief.current_state_flags[:3] or ["(none)"]
+        notes = brief.memory_notes[:2] or ["(none)"]
+        avoid = avoid_phrases[:4] or ["(none)"]
+        question = brief.question_if_needed or "(none)"
+        next_step = brief.suggested_next_step or "(none)"
+
+        def _lines(items: list[str]) -> str:
+            return "\n".join(f"- {item}" for item in items)
+
+        return (
+            f"LATEST USER MESSAGE:\n{brief.latest_user_message}\n\n"
+            f"REPLY GOAL: {brief.response_goal}\n"
+            f"URGENCY: {brief.urgency_level}\n"
+            f"TONE MODE: {brief.style_mode}\n"
+            f"REASON FOR REPLY: {brief.operational_reason or '(none)'}\n\n"
+            f"KEY FACTS TO INCLUDE:\n{_lines(key_facts)}\n\n"
+            f"SUGGESTED NEXT STEP:\n{next_step}\n\n"
+            f"QUESTION IF NEEDED:\n{question}\n\n"
+            f"ACTIVE TASKS:\n{_lines(tasks)}\n\n"
+            f"UPCOMING DEADLINES:\n{_lines(deadlines)}\n\n"
+            f"CURRENT USER FLAGS:\n{_lines(flags)}\n\n"
+            f"MEMORY NOTES:\n{_lines(notes)}\n\n"
+            f"RECENT THREAD:\n{_lines(recent_thread)}\n\n"
+            f"AVOID REPEATING THESE OPENERS:\n{_lines(avoid)}\n\n"
+            f"OUTPUT CONSTRAINTS:\n"
+            f"- max_chunks={brief.max_chunks}\n"
+            f"- max_chunk_length={brief.max_chunk_length}\n"
+            "- answer the latest user message directly\n"
+            "- keep it human and text-like\n"
+            "- never expose internal system labels\n"
+        )
 
     @staticmethod
     def _extract_messages_from_text(text: str | None) -> list[str] | None:
@@ -142,3 +175,20 @@ class ConversationComposer:
         digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
         idx = int(digest[:8], 16) % len(options)
         return options[idx]
+
+    @classmethod
+    def _looks_internal_or_robotic(cls, text: str) -> bool:
+        lowered = text.lower()
+        return any(flag in lowered for flag in cls._quality_banned_openers())
+
+    @staticmethod
+    def _quality_banned_openers() -> list[str]:
+        return [
+            "open conversational message received",
+            "general chat intent",
+            "intent=",
+            "response_goal",
+            "tiny compose hiccup",
+            "generation miss",
+            "response engine glitched",
+        ]

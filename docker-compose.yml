@@ -49,7 +49,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - friend_data:/data
-    command: celery -A app.worker.celery_app.celery_app worker -l INFO -Ofair --concurrency=2 --prefetch-multiplier=1
+    command: celery -A app.worker.celery_app.celery_app worker -l INFO -Ofair --concurrency=${WORKER_CONCURRENCY:-1} --prefetch-multiplier=1
 
   beat:
     build:

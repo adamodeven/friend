@@ -32,6 +32,9 @@ class ConversationComposer:
                 max_chunks=brief.max_chunks,
             )
             normalized = self._postprocess_messages(normalized, brief)
+            if not normalized or self._is_unacceptable_output(normalized, brief):
+                fallback = self._fallback_messages(brief)
+                return ComposedReply(messages=fallback, used_fallback=True, regenerated_for_repetition=regenerated)
             return ComposedReply(messages=normalized, used_fallback=False, regenerated_for_repetition=regenerated)
 
         fallback = self._fallback_messages(brief)
@@ -71,13 +74,20 @@ class ConversationComposer:
         return messages, regenerated
 
     def _generate_messages(self, *, brief: ReplyBrief, avoid_phrases: list[str], strict: bool) -> list[str] | None:
-        payload = self._model_payload(brief=brief, avoid_phrases=avoid_phrases)
+        lightweight = self._should_use_lightweight_compose(brief)
+        payload = self._model_payload(brief=brief, avoid_phrases=avoid_phrases, lightweight=lightweight)
+        options = {
+            "temperature": 0.62 if not strict else 0.45,
+            "num_predict": 42 if lightweight else 72,
+            "num_ctx": 512 if lightweight else 768,
+            "repeat_penalty": 1.15,
+        }
         # Keep compose to one LLM call for predictable latency under local CPU inference.
         text = self.adapter.text_completion(
             system=self._system_prompt(strict=strict),
             user=payload,
-            options={"temperature": 0.72 if not strict else 0.55, "num_predict": 120},
-            request_timeout_seconds=30,
+            options=options,
+            request_timeout_seconds=12 if lightweight else 18,
         )
         return self._extract_messages_from_text(text)
 
@@ -104,13 +114,13 @@ class ConversationComposer:
             f"{strict_rules}"
         )
 
-    def _model_payload(self, *, brief: ReplyBrief, avoid_phrases: list[str]) -> str:
-        recent_thread = brief.recent_thread[-6:] or ["(no prior thread)"]
-        key_facts = brief.key_facts_to_include[:4] or ["(none)"]
-        tasks = brief.active_task_context[:3] or ["(none)"]
-        deadlines = brief.deadline_context[:3] or ["(none)"]
-        flags = brief.current_state_flags[:3] or ["(none)"]
-        notes = brief.memory_notes[:2] or ["(none)"]
+    def _model_payload(self, *, brief: ReplyBrief, avoid_phrases: list[str], lightweight: bool) -> str:
+        recent_thread = brief.recent_thread[-(3 if lightweight else 6) :] or ["(no prior thread)"]
+        key_facts = brief.key_facts_to_include[: (2 if lightweight else 4)] or ["(none)"]
+        tasks = (brief.active_task_context[:1] if lightweight else brief.active_task_context[:3]) or ["(none)"]
+        deadlines = (brief.deadline_context[:1] if lightweight else brief.deadline_context[:3]) or ["(none)"]
+        flags = (brief.current_state_flags[:1] if lightweight else brief.current_state_flags[:3]) or ["(none)"]
+        notes = (brief.memory_notes[:1] if lightweight else brief.memory_notes[:2]) or ["(none)"]
         avoid = avoid_phrases[:4] or ["(none)"]
         question = brief.question_if_needed or "(none)"
         next_step = brief.suggested_next_step or "(none)"
@@ -118,7 +128,7 @@ class ConversationComposer:
         def _lines(items: list[str]) -> str:
             return "\n".join(f"- {item}" for item in items)
 
-        return (
+        payload = (
             f"LATEST USER MESSAGE:\n{brief.latest_user_message}\n\n"
             f"REPLY GOAL: {brief.response_goal}\n"
             f"URGENCY: {brief.urgency_level}\n"
@@ -141,6 +151,17 @@ class ConversationComposer:
             "- keep it human and text-like\n"
             "- never expose internal system labels\n"
         )
+        if lightweight:
+            return payload
+        return payload
+
+    @staticmethod
+    def _should_use_lightweight_compose(brief: ReplyBrief) -> bool:
+        if brief.response_goal in {"open_conversation", "acknowledge_context"}:
+            return True
+        if brief.response_goal == "answer_question" and len(brief.key_facts_to_include) <= 2:
+            return True
+        return False
 
     @staticmethod
     def _extract_messages_from_text(text: str | None) -> list[str] | None:
@@ -180,13 +201,22 @@ class ConversationComposer:
     @staticmethod
     def _fallback_opening(seed: str) -> str:
         options = [
-            "my response engine glitched for a sec.",
-            "tiny compose hiccup on my side.",
-            "i hit a quick generation miss there.",
+            "got your text.",
+            "i'm here.",
+            "saw that.",
         ]
         digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
         idx = int(digest[:8], 16) % len(options)
         return options[idx]
+
+    def _is_unacceptable_output(self, messages: list[str], brief: ReplyBrief) -> bool:
+        combined = " ".join(messages)
+        return (
+            self._looks_internal_or_robotic(combined)
+            or self._looks_low_quality(combined, brief.latest_user_message)
+            or self._has_parrot_bubble(messages, brief.latest_user_message)
+            or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
+        )
 
     @classmethod
     def _looks_internal_or_robotic(cls, text: str) -> bool:
@@ -222,7 +252,7 @@ class ConversationComposer:
         if cand_norm and user_norm:
             similarity = SequenceMatcher(a=cand_norm, b=user_norm).ratio()
             # If we mostly parroted the user, force a regeneration.
-            if similarity >= 0.86 and len(cand_norm.split()) <= 18:
+            if similarity >= 0.94:
                 return True
         return False
 
@@ -236,12 +266,17 @@ class ConversationComposer:
         user_norm = cls._normalize_text(latest_user_message)
         if not user_norm:
             return False
+        user_words = user_norm.split()
         for bubble in messages[:3]:
             bubble_norm = cls._normalize_text(bubble)
             if not bubble_norm:
                 continue
+            if bubble_norm == user_norm:
+                return True
             ratio = SequenceMatcher(a=bubble_norm, b=user_norm).ratio()
-            if ratio >= 0.88 and len(bubble_norm.split()) <= 14:
+            if len(user_words) >= 8 and ratio >= 0.92:
+                return True
+            if len(user_words) < 8 and ratio >= 0.97:
                 return True
         return False
 
@@ -256,12 +291,14 @@ class ConversationComposer:
 
     @classmethod
     def _postprocess_messages(cls, messages: list[str], brief: ReplyBrief) -> list[str]:
-        if brief.response_goal != "answer_question" or not messages:
+        if not messages:
             return messages
         first = messages[0].strip()
         user_norm = cls._normalize_text(brief.latest_user_message)
         first_norm = cls._normalize_text(first)
-        if first.endswith("?") or (user_norm and first_norm and SequenceMatcher(a=first_norm, b=user_norm).ratio() >= 0.9):
-            if len(messages) > 1:
-                return messages[1:]
+        is_first_echo = user_norm and first_norm and SequenceMatcher(a=first_norm, b=user_norm).ratio() >= 0.9
+        if is_first_echo and len(messages) > 1:
+            return messages[1:]
+        if brief.response_goal == "answer_question" and first.endswith("?") and len(messages) > 1:
+            return messages[1:]
         return messages

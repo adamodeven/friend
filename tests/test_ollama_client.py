@@ -9,6 +9,10 @@ def _adapter_for_test() -> OllamaAdapter:
     adapter._text_model = "slow-model"
     adapter._fallback_text_model = "fast-model"
     adapter._keep_alive = "30m"
+    adapter._auto_pull_missing_models = False
+    adapter._native_api_available = None
+    adapter._openai_compat_available = None
+    adapter._base_url = "http://ollama:11434"
     return adapter
 
 
@@ -47,3 +51,52 @@ def test_json_completion_falls_back_and_parses():
     assert result is not None
     assert result["intent"] == "general_chat"
     assert calls == ["slow-model", "fast-model"]
+
+
+def test_text_completion_uses_openai_compat_when_native_returns_404():
+    adapter = _adapter_for_test()
+
+    def fake_generate(payload, *, request_timeout_seconds=None):  # noqa: ANN001
+        return "__generate_404__"
+
+    def fake_openai_chat_completion(  # noqa: ANN001
+        *,
+        system,
+        user,
+        model,
+        options=None,
+        images=None,
+        request_timeout_seconds=None,
+    ):
+        if model == "slow-model":
+            return None
+        return "yep live now"
+
+    adapter._generate_content = fake_generate  # type: ignore[attr-defined]
+    adapter._openai_chat_completion = fake_openai_chat_completion  # type: ignore[attr-defined]
+
+    result = adapter.text_completion(system="s", user="u", request_timeout_seconds=18)
+    assert result == "yep live now"
+
+
+def test_text_completion_retries_after_model_not_found_when_auto_pull_enabled():
+    adapter = _adapter_for_test()
+    adapter._auto_pull_missing_models = True
+    seen = {"count": 0}
+
+    def fake_generate(payload, *, request_timeout_seconds=None):  # noqa: ANN001
+        if payload["model"] == "slow-model":
+            return None
+        seen["count"] += 1
+        if seen["count"] == 1:
+            return "__model_not_found__"
+        return "ready after pull"
+
+    def fake_pull_model(model):  # noqa: ANN001
+        return model == "fast-model"
+
+    adapter._generate_content = fake_generate  # type: ignore[attr-defined]
+    adapter._pull_model = fake_pull_model  # type: ignore[attr-defined]
+
+    result = adapter.text_completion(system="s", user="u", request_timeout_seconds=18)
+    assert result == "ready after pull"

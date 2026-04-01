@@ -46,8 +46,8 @@ class ReplyBriefBuilder:
         for task in upcoming:
             if not task.deadline_at:
                 continue
-                due = task.deadline_at.astimezone(ZoneInfo(user.timezone)).strftime("%a %-m/%-d %-I:%M%p").lower()
-                deadline_context.append(f"{task.title} due {due}")
+            due = task.deadline_at.astimezone(ZoneInfo(user.timezone)).strftime("%a %-m/%-d %-I:%M%p").lower()
+            deadline_context.append(f"{task.title} due {due}")
 
         # Keep capability/meta replies conversational and avoid unnecessary task-context bleed.
         lowered_message = latest_user_message.lower()

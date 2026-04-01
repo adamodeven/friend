@@ -22,6 +22,9 @@ class OllamaAdapter:
         self._base_url = settings.ollama_base_url.rstrip("/")
         self._timeout_seconds = float(settings.ollama_timeout_seconds)
         self._keep_alive = settings.ollama_keep_alive
+        self._auto_pull_missing_models = settings.ollama_auto_pull_missing_models
+        self._native_api_available: bool | None = None
+        self._openai_compat_available: bool | None = None
         self._timeout = httpx.Timeout(
             connect=min(5.0, self._timeout_seconds),
             read=self._timeout_seconds,
@@ -47,7 +50,10 @@ class OllamaAdapter:
             return None
         candidates = self._text_model_candidates(model)
         per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
+        saw_native_404 = False
         for candidate in candidates:
+            if self._native_api_available is False:
+                break
             payload_generate = {
                 "model": candidate,
                 "stream": False,
@@ -59,11 +65,48 @@ class OllamaAdapter:
                 payload_generate["options"] = options
             content = self._generate_content(payload_generate, request_timeout_seconds=per_attempt_timeout)
             if content == "__generate_404__":
+                saw_native_404 = True
+                continue
+            if content == "__model_not_found__":
+                if self._auto_pull_missing_models and self._pull_model(candidate):
+                    retry_content = self._generate_content(payload_generate, request_timeout_seconds=per_attempt_timeout)
+                    if retry_content and retry_content not in {"__generate_404__", "__model_not_found__"}:
+                        parsed = self._parse_json(retry_content)
+                        if isinstance(parsed, dict):
+                            return parsed
                 continue
             if content:
                 parsed = self._parse_json(content)
                 if isinstance(parsed, dict):
                     return parsed
+
+        if self._openai_compat_available is not False and (saw_native_404 or self._native_api_available is False):
+            for candidate in candidates:
+                content = self._openai_chat_completion(
+                    system=system,
+                    user=user,
+                    model=candidate,
+                    options=options,
+                    request_timeout_seconds=per_attempt_timeout,
+                )
+                if content == "__model_not_found__":
+                    if self._auto_pull_missing_models and self._pull_model(candidate):
+                        retry_content = self._openai_chat_completion(
+                            system=system,
+                            user=user,
+                            model=candidate,
+                            options=options,
+                            request_timeout_seconds=per_attempt_timeout,
+                        )
+                        if retry_content and retry_content != "__model_not_found__":
+                            parsed = self._parse_json(retry_content)
+                            if isinstance(parsed, dict):
+                                return parsed
+                    continue
+                if content:
+                    parsed = self._parse_json(content)
+                    if isinstance(parsed, dict):
+                        return parsed
         return None
 
     def text_completion(
@@ -79,7 +122,10 @@ class OllamaAdapter:
             return None
         candidates = self._text_model_candidates(model)
         per_attempt_timeout = self._per_attempt_timeout(request_timeout_seconds, len(candidates))
+        saw_native_404 = False
         for candidate in candidates:
+            if self._native_api_available is False:
+                break
             payload_generate = {
                 "model": candidate,
                 "stream": False,
@@ -89,8 +135,41 @@ class OllamaAdapter:
             if options:
                 payload_generate["options"] = options
             content = self._generate_content(payload_generate, request_timeout_seconds=per_attempt_timeout)
-            if content and content != "__generate_404__":
+            if content == "__generate_404__":
+                saw_native_404 = True
+                continue
+            if content == "__model_not_found__":
+                if self._auto_pull_missing_models and self._pull_model(candidate):
+                    retry_content = self._generate_content(payload_generate, request_timeout_seconds=per_attempt_timeout)
+                    if retry_content and retry_content not in {"__generate_404__", "__model_not_found__"}:
+                        return retry_content
+                continue
+            if content:
                 return content
+
+        if self._openai_compat_available is not False and (saw_native_404 or self._native_api_available is False):
+            for candidate in candidates:
+                content = self._openai_chat_completion(
+                    system=system,
+                    user=user,
+                    model=candidate,
+                    options=options,
+                    request_timeout_seconds=per_attempt_timeout,
+                )
+                if content == "__model_not_found__":
+                    if self._auto_pull_missing_models and self._pull_model(candidate):
+                        retry_content = self._openai_chat_completion(
+                            system=system,
+                            user=user,
+                            model=candidate,
+                            options=options,
+                            request_timeout_seconds=per_attempt_timeout,
+                        )
+                        if retry_content and retry_content != "__model_not_found__":
+                            return retry_content
+                    continue
+                if content:
+                    return content
         return None
 
     def vision_json(
@@ -117,6 +196,8 @@ class OllamaAdapter:
             ],
         }
         content = self._chat_content(payload, request_timeout_seconds=request_timeout_seconds)
+        if content == "__model_not_found__" and self._auto_pull_missing_models and self._pull_model(self._vision_model):
+            content = self._chat_content(payload, request_timeout_seconds=request_timeout_seconds)
         if content == "__chat_404__":
             payload_generate = {
                 "model": self._vision_model,
@@ -126,6 +207,17 @@ class OllamaAdapter:
                 "images": [image_b64],
             }
             content = self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
+            if content == "__model_not_found__" and self._auto_pull_missing_models and self._pull_model(self._vision_model):
+                content = self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
+            if content == "__generate_404__":
+                content = self._openai_chat_completion(
+                    system=system,
+                    user=user_prompt,
+                    model=self._vision_model,
+                    options={"format": "json"},
+                    images=[image_b64],
+                    request_timeout_seconds=request_timeout_seconds,
+                )
         if not content:
             return None
         parsed = self._parse_json(content)
@@ -138,9 +230,18 @@ class OllamaAdapter:
             with httpx.Client(timeout=self._timeout_for(request_timeout_seconds)) as client:
                 response = client.post(f"{self._base_url}/api/chat", json=payload)
                 if response.status_code == 404:
+                    try:
+                        error = (response.json() or {}).get("error", "")
+                    except Exception:
+                        error = response.text
+                    if "model" in str(error).lower() and "not found" in str(error).lower():
+                        self._native_api_available = True
+                        return "__model_not_found__"
+                    self._native_api_available = False
                     return "__chat_404__"
                 response.raise_for_status()
                 data = response.json()
+            self._native_api_available = True
             return (data.get("message") or {}).get("content")
         except Exception as exc:  # pragma: no cover
             logger.exception("ollama chat failed: %s", exc)
@@ -151,13 +252,110 @@ class OllamaAdapter:
             with httpx.Client(timeout=self._timeout_for(request_timeout_seconds)) as client:
                 response = client.post(f"{self._base_url}/api/generate", json=payload)
                 if response.status_code == 404:
+                    try:
+                        error = (response.json() or {}).get("error", "")
+                    except Exception:
+                        error = response.text
+                    if "model" in str(error).lower() and "not found" in str(error).lower():
+                        self._native_api_available = True
+                        return "__model_not_found__"
+                    self._native_api_available = False
                     return "__generate_404__"
                 response.raise_for_status()
                 data = response.json()
+            self._native_api_available = True
             return data.get("response")
         except Exception as exc:  # pragma: no cover
             logger.exception("ollama generate failed: %s", exc)
             return None
+
+    def _openai_chat_completion(
+        self,
+        *,
+        system: str,
+        user: str,
+        model: str,
+        options: dict[str, Any] | None = None,
+        images: list[str] | None = None,
+        request_timeout_seconds: float | None = None,
+    ) -> str | None:
+        url = self._openai_chat_url()
+        messages: list[dict[str, Any]]
+        if images:
+            user_content: list[dict[str, Any]] = [{"type": "text", "text": user}]
+            for image_b64 in images:
+                user_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}})
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ]
+        else:
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+        }
+        if options:
+            if "temperature" in options:
+                payload["temperature"] = options["temperature"]
+            if "num_predict" in options:
+                payload["max_tokens"] = options["num_predict"]
+            if "format" in options and options["format"] == "json":
+                payload["response_format"] = {"type": "json_object"}
+        try:
+            with httpx.Client(timeout=self._timeout_for(request_timeout_seconds)) as client:
+                response = client.post(url, json=payload)
+                if response.status_code == 404:
+                    self._openai_compat_available = False
+                    try:
+                        error = (response.json() or {}).get("error", "")
+                    except Exception:
+                        error = response.text
+                    if "model" in str(error).lower() and "not found" in str(error).lower():
+                        return "__model_not_found__"
+                    return None
+                response.raise_for_status()
+                data = response.json()
+            self._openai_compat_available = True
+            choices = data.get("choices") or []
+            if not choices:
+                return None
+            msg = choices[0].get("message") or {}
+            content = msg.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                texts = [part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
+                merged = "\n".join(t for t in texts if t.strip()).strip()
+                return merged or None
+            return None
+        except Exception as exc:  # pragma: no cover
+            logger.exception("ollama openai-compat chat failed: %s", exc)
+            return None
+
+    def _openai_chat_url(self) -> str:
+        if self._base_url.endswith("/v1"):
+            return f"{self._base_url}/chat/completions"
+        return f"{self._base_url}/v1/chat/completions"
+
+    def _pull_model(self, model: str) -> bool:
+        try:
+            with httpx.Client(timeout=self._timeout_for(120)) as client:
+                response = client.post(
+                    f"{self._base_url}/api/pull",
+                    json={"model": model, "stream": False},
+                )
+                if response.status_code == 404:
+                    return False
+                response.raise_for_status()
+            return True
+        except Exception as exc:  # pragma: no cover
+            logger.exception("ollama model auto-pull failed model=%s error=%s", model, exc)
+            return False
 
     def _download_image_as_base64(
         self,
@@ -199,7 +397,7 @@ class OllamaAdapter:
         if total_timeout is None:
             return None
         safe_attempts = max(1, attempts)
-        return max(8.0, float(total_timeout) / safe_attempts)
+        return max(4.0, float(total_timeout) / safe_attempts)
 
     @staticmethod
     def _parse_json(text: str) -> Any:

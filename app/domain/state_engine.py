@@ -196,7 +196,10 @@ class StateEngine:
                 outcome.emotional_tone = "supportive"
                 next_task = self._next_task(session, user.id)
                 if next_task:
-                    outcome.suggested_next_step = f"want to keep that momentum and start {next_task.title} next?"
+                    title = next_task.title.strip()
+                    if len(title) > 60:
+                        title = f"{title[:57].rstrip()}..."
+                    outcome.suggested_next_step = f"take a first pass on '{title}'"
             else:
                 outcome.response_goal = "answer_question" if "?" in raw_text else "open_conversation"
             outcome.emotional_tone = "casual"

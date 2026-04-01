@@ -161,6 +161,21 @@ def test_composer_regenerates_when_first_bubble_parrots_user():
     assert not any(msg.strip().lower() == "are you actually live now" for msg in reply.messages)
 
 
+def test_composer_regenerates_when_first_bubble_repeats_user_prefix():
+    adapter = FakeAdapter(
+        [
+            "lowk making good progress you actually respond now so thats good, nice work",
+            "nice, that's real progress. keep that same pace tonight.",
+        ],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("lowk making good progress you actually respond now so thats good"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    assert not reply.messages[0].lower().startswith("lowk making good progress")
+
+
 def test_composer_regenerates_if_answer_goal_starts_with_question():
     adapter = FakeAdapter(
         [

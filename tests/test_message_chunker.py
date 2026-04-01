@@ -11,3 +11,9 @@ def test_chunker_splits_on_semantic_boundaries():
     assert len(chunks) >= 2
     assert chunks[0].endswith(".")
 
+
+def test_chunker_splits_run_on_text_on_connectors():
+    chunker = MessageChunker()
+    text = "youre making good progress now keep that same pace tonight and send me the next blocker"
+    chunks = chunker.chunk(text, max_chunk_length=48, max_chunks=3)
+    assert len(chunks) >= 2

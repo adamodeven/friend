@@ -78,7 +78,7 @@ class ConversationComposer:
         payload = self._model_payload(brief=brief, avoid_phrases=avoid_phrases, lightweight=lightweight)
         options = {
             "temperature": 0.62 if not strict else 0.45,
-            "num_predict": 42 if lightweight else 72,
+            "num_predict": 28 if lightweight else 60,
             "num_ctx": 512 if lightweight else 768,
             "repeat_penalty": 1.15,
         }
@@ -107,6 +107,7 @@ class ConversationComposer:
             "Never robotic, corporate, therapist-y, or generic productivity-bot language. "
             "If user asks what you do or whether replies are canned/live, answer directly in plain language first. "
             "For small-talk or quick checks, do not mirror the user's exact words back. "
+            "Never start your first bubble with the same 4+ word sequence the user just sent. "
             "No em dashes, no markdown, no labels, no numbering. "
             "Answer what the user actually said, in context, and keep momentum. "
             "Use 1-3 message bubbles max, each short. "
@@ -273,6 +274,11 @@ class ConversationComposer:
                 continue
             if bubble_norm == user_norm:
                 return True
+            leading_overlap = cls._leading_overlap_words(bubble_norm, user_norm)
+            if len(user_words) >= 6 and leading_overlap >= 4:
+                return True
+            if len(user_words) < 6 and leading_overlap >= 3:
+                return True
             ratio = SequenceMatcher(a=bubble_norm, b=user_norm).ratio()
             if len(user_words) >= 8 and ratio >= 0.92:
                 return True
@@ -302,3 +308,14 @@ class ConversationComposer:
         if brief.response_goal == "answer_question" and first.endswith("?") and len(messages) > 1:
             return messages[1:]
         return messages
+
+    @staticmethod
+    def _leading_overlap_words(text_a: str, text_b: str) -> int:
+        words_a = text_a.split()
+        words_b = text_b.split()
+        overlap = 0
+        for left, right in zip(words_a, words_b):
+            if left != right:
+                break
+            overlap += 1
+        return overlap

@@ -53,5 +53,9 @@ class MessageChunker:
         blocks = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
         if len(blocks) > 1:
             return blocks
-        return [p.strip() for p in re.split(r"(?<=[.!?])\s+", text) if p.strip()]
-
+        sentence_parts = [p.strip() for p in re.split(r"(?<=[.!?,])\s+", text) if p.strip()]
+        if len(sentence_parts) > 1:
+            return sentence_parts
+        # Handle run-on model output that lacks punctuation but has natural connector boundaries.
+        connector_parts = [p.strip() for p in re.split(r"\s+(?=(?:but|so|then|also|anyway|now)\b)", text, flags=re.IGNORECASE) if p.strip()]
+        return connector_parts or [text.strip()]

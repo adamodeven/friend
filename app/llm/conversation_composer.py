@@ -4,6 +4,7 @@ import hashlib
 import re
 from difflib import SequenceMatcher
 
+from app.core.config import get_settings
 from app.llm.client import OllamaAdapter
 from app.llm.message_chunker import MessageChunker
 from app.llm.repetition_guard import RepetitionGuard
@@ -18,9 +19,11 @@ class ConversationComposer:
         chunker: MessageChunker | None = None,
         repetition_guard: RepetitionGuard | None = None,
     ) -> None:
+        settings = get_settings()
         self.adapter = adapter or OllamaAdapter()
         self.chunker = chunker or MessageChunker()
         self.repetition_guard = repetition_guard or RepetitionGuard()
+        self._compose_model = settings.ollama_composer_model.strip() or None
 
     def compose(self, brief: ReplyBrief) -> ComposedReply:
         recent_assistant = [line.split(":", 1)[1].strip() for line in brief.recent_thread if line.startswith("assistant:")]
@@ -114,6 +117,7 @@ class ConversationComposer:
         text = self.adapter.text_completion(
             system=self._system_prompt(strict=strict),
             user=payload,
+            model=self._compose_model,
             options=options,
             request_timeout_seconds=14 if lightweight else 22,
         )

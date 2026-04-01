@@ -1,6 +1,15 @@
 from app.llm.extraction import IntentExtractor
 
 
+class _CountingAdapter:
+    def __init__(self) -> None:
+        self.json_calls = 0
+
+    def json_completion(self, **kwargs):  # noqa: ANN003,ANN201
+        self.json_calls += 1
+        return None
+
+
 def test_extract_add_task_from_plain_text():
     extractor = IntentExtractor()
     result = extractor.extract("yo I need to finish the CAD for the enclosure by tomorrow night", "America/New_York")
@@ -50,3 +59,11 @@ def test_fallback_task_title_removes_temporal_prefix_noise():
     assert "tmr" not in result.task.title.lower()
     assert "tomorrow" not in result.task.title.lower()
     assert "submit" in result.task.title.lower()
+
+
+def test_high_confidence_add_task_skips_llm_intent_call():
+    adapter = _CountingAdapter()
+    extractor = IntentExtractor(adapter=adapter)
+    result = extractor.extract("i need to submit the application tomorrow morning", "America/New_York")
+    assert result.intent == "add_task"
+    assert adapter.json_calls == 0

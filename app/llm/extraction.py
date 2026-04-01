@@ -18,6 +18,8 @@ class IntentExtractor:
         fallback = self._extract_fallback(text, timezone)
         if fallback.intent in {"general_chat", "status_query", "context_signal"}:
             return fallback
+        if fallback.confidence >= 0.78 and fallback.intent in {"add_task", "timeline_query", "complete_task", "reflection"}:
+            return fallback
 
         llm_result = self._extract_with_llm(text, timezone)
         if llm_result:
@@ -42,6 +44,7 @@ class IntentExtractor:
                 "num_predict": self.settings.ollama_intent_num_predict,
                 "num_ctx": self.settings.ollama_intent_num_ctx,
             },
+            model=self.settings.ollama_intent_model.strip() or None,
             request_timeout_seconds=8,
         )
         if not payload:

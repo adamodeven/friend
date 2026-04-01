@@ -51,6 +51,7 @@ class ConversationComposer:
             self._looks_internal_or_robotic(combined)
             or self._looks_low_quality(combined, brief.latest_user_message)
             or self._has_parrot_bubble(messages, brief.latest_user_message)
+            or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
         ):
             retry = self._generate_messages(
                 brief=brief,
@@ -135,6 +136,7 @@ class ConversationComposer:
             f"- max_chunks={brief.max_chunks}\n"
             f"- max_chunk_length={brief.max_chunk_length}\n"
             "- answer the latest user message directly\n"
+            "- if this is an answer_question goal, first bubble must be a direct answer statement\n"
             "- keep it human and text-like\n"
             "- never expose internal system labels\n"
         )
@@ -241,3 +243,12 @@ class ConversationComposer:
             if ratio >= 0.88 and len(bubble_norm.split()) <= 14:
                 return True
         return False
+
+    @staticmethod
+    def _first_bubble_asks_question_when_direct_answer_needed(messages: list[str], brief: ReplyBrief) -> bool:
+        if brief.response_goal != "answer_question":
+            return False
+        if not messages:
+            return False
+        first = messages[0].strip()
+        return first.endswith("?")

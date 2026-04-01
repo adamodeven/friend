@@ -49,6 +49,15 @@ def _brief(latest: str, recent_thread: list[str] | None = None) -> ReplyBrief:
     )
 
 
+def _answer_brief(latest: str) -> ReplyBrief:
+    return ReplyBrief(
+        response_goal="answer_question",
+        latest_user_message=latest,
+        key_facts_to_include=["yes, i'm live right now and i received this message"],
+        generated_at=datetime.now(),
+    )
+
+
 def test_open_ended_message_uses_llm_path():
     adapter = FakeAdapter(["yo what's up, i'm here. what's the move tonight?"], enabled=True)
     composer = ConversationComposer(adapter=adapter)
@@ -150,3 +159,18 @@ def test_composer_regenerates_when_first_bubble_parrots_user():
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
     assert not any(msg.strip().lower() == "are you actually live now" for msg in reply.messages)
+
+
+def test_composer_regenerates_if_answer_goal_starts_with_question():
+    adapter = FakeAdapter(
+        [
+            "are you alive?\n\ni'm here.",
+            "yeah i'm live rn. i got your text.",
+        ],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_answer_brief("are you actually live now?"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    assert not reply.messages[0].strip().endswith("?")

@@ -115,8 +115,8 @@ def test_fallback_answer_question_handles_live_vs_canned_cleanly():
     assert reply.used_fallback is True
     assert reply.messages
     lowered = " ".join(reply.messages).lower()
-    assert "live-generated" in lowered
     assert "not canned" in lowered
+    assert "backup mode" in lowered
 
 
 def test_repetition_guard_triggers_regeneration():

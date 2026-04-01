@@ -347,13 +347,15 @@ class ConversationComposer:
         lowered_user = brief.latest_user_message.lower()
         if brief.response_goal == "answer_question":
             if any(token in lowered_user for token in ("canned", "live", "generated")):
-                base = "live-generated right now, not canned."
+                base = "not canned, but i'm in backup mode right now while model access is limited."
             elif brief.key_facts_to_include:
                 base = brief.key_facts_to_include[0]
             else:
                 base = "yeah, i'm live and i got your message."
         elif brief.response_goal == "timeline_summary":
-            base = brief.key_facts_to_include[0] if brief.key_facts_to_include else "no hard due items right now."
+            summary = brief.key_facts_to_include[0] if brief.key_facts_to_include else "no hard due items right now."
+            summary = re.sub(r"\s*\n\s*-\s*", "; ", summary).replace("\n", " ").strip()
+            base = re.sub(r"\s{2,}", " ", summary)
         elif brief.response_goal == "acknowledge_new_task":
             first_fact = brief.key_facts_to_include[0] if brief.key_facts_to_include else "task captured."
             if brief.should_ask_question and brief.question_if_needed:

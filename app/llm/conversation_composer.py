@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import re
+from difflib import SequenceMatcher
 
 from app.llm.client import OllamaAdapter
 from app.llm.message_chunker import MessageChunker
@@ -45,7 +47,7 @@ class ConversationComposer:
             return None, False
 
         combined = " ".join(messages)
-        if self._looks_internal_or_robotic(combined):
+        if self._looks_internal_or_robotic(combined) or self._looks_low_quality(combined, brief.latest_user_message):
             retry = self._generate_messages(
                 brief=brief,
                 avoid_phrases=avoid_phrases + self._quality_banned_openers(),
@@ -77,7 +79,9 @@ class ConversationComposer:
     def _system_prompt(*, strict: bool) -> str:
         strict_rules = (
             "Do not mention internal labels like intent, response_goal, parser, composer, fallback, or glitches. "
-            "Do not say 'open conversational message received' or anything similar."
+            "Do not say 'open conversational message received' or anything similar. "
+            "Do not echo section labels like active tasks, deadlines, key facts, or recent thread. "
+            "Do not mirror the user's exact sentence back to them."
             if strict
             else ""
         )
@@ -191,4 +195,30 @@ class ConversationComposer:
             "tiny compose hiccup",
             "generation miss",
             "response engine glitched",
+            "active tasks:",
+            "upcoming deadlines:",
+            "key facts",
+            "recent thread",
         ]
+
+    @classmethod
+    def _looks_low_quality(cls, candidate: str, latest_user_message: str) -> bool:
+        lowered = candidate.lower().strip()
+        if any(token in lowered for token in cls._quality_banned_openers()):
+            return True
+        if "user asked:" in lowered:
+            return True
+
+        cand_norm = cls._normalize_text(candidate)
+        user_norm = cls._normalize_text(latest_user_message)
+        if cand_norm and user_norm:
+            similarity = SequenceMatcher(a=cand_norm, b=user_norm).ratio()
+            # If we mostly parroted the user, force a regeneration.
+            if similarity >= 0.86 and len(cand_norm.split()) <= 18:
+                return True
+        return False
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        cleaned = re.sub(r"[^a-z0-9\s]+", " ", text.lower())
+        return " ".join(cleaned.split())

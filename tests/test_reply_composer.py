@@ -105,3 +105,33 @@ def test_composer_regenerates_when_internal_phrase_leaks():
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
     assert "open conversational message received" not in " ".join(reply.messages).lower()
+
+
+def test_composer_regenerates_when_output_leaks_context_labels():
+    adapter = FakeAdapter(
+        [
+            "active tasks: finish cad upcoming deadlines: tomorrow night",
+            "yep i'm live. i got your update. wanna lock the first 30 min now?",
+        ],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("are you actually live now"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    assert "active tasks:" not in " ".join(reply.messages).lower()
+
+
+def test_composer_regenerates_when_it_parrots_user_message():
+    adapter = FakeAdapter(
+        [
+            "are you actually live now",
+            "yeah i'm here rn and tracking. what do you want to knock out first?",
+        ],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("are you actually live now"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    assert "what do you want to knock out first?" in " ".join(reply.messages).lower()

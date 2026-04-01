@@ -35,5 +35,19 @@ async def twilio_webhook(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid twilio signature")
 
     payload = InboundSmsPayload.from_twilio_form(data)
-    process_inbound_sms_task.delay(payload.model_dump(mode="json", by_alias=True))
+    sid = payload.message_sid or "unknown"
+    logger.info(
+        "twilio inbound accepted sid=%s from=%s to=%s num_media=%s",
+        sid,
+        payload.from_number,
+        payload.to_number,
+        payload.num_media,
+    )
+    payload_json = payload.model_dump(mode="json", by_alias=True)
+    try:
+        process_inbound_sms_task.delay(payload_json)
+        logger.info("twilio inbound queued sid=%s", sid)
+    except Exception:
+        logger.exception("failed to enqueue inbound sid=%s, processing inline", sid)
+        process_inbound_sms_task(payload_json)
     return "ok"

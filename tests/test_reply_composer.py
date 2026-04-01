@@ -95,50 +95,34 @@ def test_composer_keeps_single_llm_attempt_path():
     adapter = FakeAdapter(["yo i got you\n\nstart with a 20 min pass, then ping me."], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_brief("i'm cooked"))
-    assert adapter.text_calls >= 1
+    assert adapter.text_calls == 1
     assert adapter.calls == 0
     assert reply.used_fallback is False
     assert len(reply.messages) >= 1
 
 
-def test_composer_regenerates_when_internal_phrase_leaks():
-    adapter = FakeAdapter(
-        [
-            "open conversational message received",
-            "yeah i'm live. i saw your text. what's the move?",
-        ],
-        enabled=True,
-    )
+def test_composer_repairs_when_internal_phrase_leaks():
+    adapter = FakeAdapter(["open conversational message received"], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_brief("is this thing on?"))
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
+    assert adapter.text_calls == 1
     assert "open conversational message received" not in " ".join(reply.messages).lower()
 
 
-def test_composer_regenerates_when_output_leaks_context_labels():
-    adapter = FakeAdapter(
-        [
-            "active tasks: finish cad upcoming deadlines: tomorrow night",
-            "yep i'm live. i got your update. wanna lock the first 30 min now?",
-        ],
-        enabled=True,
-    )
+def test_composer_repairs_when_output_leaks_context_labels():
+    adapter = FakeAdapter(["active tasks: finish cad upcoming deadlines: tomorrow night"], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_brief("are you actually live now"))
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
+    assert adapter.text_calls == 1
     assert "active tasks:" not in " ".join(reply.messages).lower()
 
 
-def test_composer_regenerates_when_output_looks_like_internal_task_dump():
-    adapter = FakeAdapter(
-        [
-            "status active p2 due negative",
-            "you're good. i'm live and tracking. what's next?",
-        ],
-        enabled=True,
-    )
+def test_composer_repairs_when_output_looks_like_internal_task_dump():
+    adapter = FakeAdapter(["status active p2 due negative"], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_brief("you online?"))
     assert reply.used_fallback is False
@@ -146,29 +130,17 @@ def test_composer_regenerates_when_output_looks_like_internal_task_dump():
     assert "status active p2 due negative" not in " ".join(reply.messages).lower()
 
 
-def test_composer_regenerates_when_it_parrots_user_message():
-    adapter = FakeAdapter(
-        [
-            "are you actually live now",
-            "yeah i'm here rn and tracking. what do you want to knock out first?",
-        ],
-        enabled=True,
-    )
+def test_composer_repairs_when_it_parrots_user_message():
+    adapter = FakeAdapter(["are you actually live now"], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_brief("are you actually live now"))
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
-    assert "what do you want to knock out first?" in " ".join(reply.messages).lower()
+    assert "are you actually live now" not in " ".join(reply.messages).lower()
 
 
-def test_composer_regenerates_when_first_bubble_parrots_user():
-    adapter = FakeAdapter(
-        [
-            "are you actually live now\n\nyeah i'm tracking everything.",
-            "yep i'm live and tracking. what's the move right now?",
-        ],
-        enabled=True,
-    )
+def test_composer_repairs_when_first_bubble_parrots_user():
+    adapter = FakeAdapter(["are you actually live now\n\nyeah i'm tracking everything."], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_brief("are you actually live now"))
     assert reply.used_fallback is False
@@ -176,14 +148,8 @@ def test_composer_regenerates_when_first_bubble_parrots_user():
     assert not any(msg.strip().lower() == "are you actually live now" for msg in reply.messages)
 
 
-def test_composer_regenerates_when_first_bubble_repeats_user_prefix():
-    adapter = FakeAdapter(
-        [
-            "lowk making good progress you actually respond now so thats good, nice work",
-            "nice, that's real progress. keep that same pace tonight.",
-        ],
-        enabled=True,
-    )
+def test_composer_repairs_when_first_bubble_repeats_user_prefix():
+    adapter = FakeAdapter(["lowk making good progress you actually respond now so thats good, nice work"], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_brief("lowk making good progress you actually respond now so thats good"))
     assert reply.used_fallback is False
@@ -192,13 +158,7 @@ def test_composer_regenerates_when_first_bubble_repeats_user_prefix():
 
 
 def test_composer_regenerates_if_answer_goal_starts_with_question():
-    adapter = FakeAdapter(
-        [
-            "are you alive?\n\ni'm here.",
-            "yeah i'm live rn. i got your text.",
-        ],
-        enabled=True,
-    )
+    adapter = FakeAdapter(["are you alive?\n\ni'm here."], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_answer_brief("are you actually live now?"))
     assert reply.used_fallback is False
@@ -207,15 +167,10 @@ def test_composer_regenerates_if_answer_goal_starts_with_question():
 
 
 def test_answer_postprocess_drops_leading_question_if_still_present():
-    adapter = FakeAdapter(
-        [
-            "are you actually live now?\n\nI'm live right now. I received your message.",
-            "are you actually live now?\n\nI'm live right now. I received your message.",
-        ],
-        enabled=True,
-    )
+    adapter = FakeAdapter(["are you actually live now?\n\nI'm live right now. I received your message."], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_answer_brief("are you actually live now?"))
     assert reply.used_fallback is False
-    assert reply.messages[0].lower().startswith("i'm live right now")
+    assert reply.regenerated_for_repetition is True
+    assert "live" in reply.messages[0].lower()
     assert not reply.messages[0].strip().endswith("?")

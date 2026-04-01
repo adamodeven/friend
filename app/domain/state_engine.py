@@ -187,11 +187,18 @@ class StateEngine:
                 outcome.key_facts_to_include.append("confirm current system status plainly")
             if any(token in lowered for token in ["live", "working", "online", "on now"]):
                 outcome.key_facts_to_include.append("yes, i'm live right now and i received this message")
-            outcome.key_facts_to_include.append(f"user asked: {raw_text[:180]}")
             outcome.should_ask_question = False
 
         else:
-            outcome.response_goal = "answer_question" if "?" in raw_text else "open_conversation"
+            lowered = raw_text.lower()
+            if any(token in lowered for token in ["progress", "made progress", "moving now", "locked in", "momentum"]):
+                outcome.response_goal = "react_to_progress"
+                outcome.emotional_tone = "supportive"
+                next_task = self._next_task(session, user.id)
+                if next_task:
+                    outcome.suggested_next_step = f"want to keep that momentum and start {next_task.title} next?"
+            else:
+                outcome.response_goal = "answer_question" if "?" in raw_text else "open_conversation"
             outcome.emotional_tone = "casual"
             outcome.should_push_for_action = False
 

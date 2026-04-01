@@ -46,28 +46,28 @@ class ConversationComposer:
 
         regenerated = False
         avoid_phrases = self.repetition_guard.avoid_phrases(recent_assistant, limit=4)
-        messages = self._generate_messages(brief=brief, avoid_phrases=avoid_phrases, strict=False)
+        lightweight = self._should_use_lightweight_compose(brief)
+        messages = self._generate_messages(brief=brief, avoid_phrases=avoid_phrases, strict=False, lightweight=lightweight)
         if not messages:
             return None, False
 
         combined = " ".join(messages)
         if self._looks_hard_structured_leak(combined):
             return None, False
-        if (
+        needs_repair = (
             self._looks_internal_or_robotic(combined)
             or self._looks_low_quality(combined, brief.latest_user_message)
             or self._has_parrot_bubble(messages, brief.latest_user_message)
             or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
-        ):
-            retry = self._generate_messages(
-                brief=brief,
-                avoid_phrases=avoid_phrases + self._quality_banned_openers(),
-                strict=True,
-            )
-            if retry:
-                messages = retry
+        )
+        if needs_repair:
+            repaired = self._repair_low_quality(brief=brief, recent_assistant=recent_assistant)
+            if repaired:
+                messages = repaired
                 combined = " ".join(messages)
                 regenerated = True
+            elif lightweight:
+                return None, False
 
         combined = " ".join(messages)
         if self.repetition_guard.is_too_similar(combined, recent_assistant):
@@ -75,21 +75,26 @@ class ConversationComposer:
             regenerated = True
         return messages, regenerated
 
-    def _generate_messages(self, *, brief: ReplyBrief, avoid_phrases: list[str], strict: bool) -> list[str] | None:
-        lightweight = self._should_use_lightweight_compose(brief)
+    def _generate_messages(
+        self,
+        *,
+        brief: ReplyBrief,
+        avoid_phrases: list[str],
+        strict: bool,
+        lightweight: bool,
+    ) -> list[str] | None:
         payload = self._model_payload(brief=brief, avoid_phrases=avoid_phrases, lightweight=lightweight)
         options = {
-            "temperature": 0.62 if not strict else 0.45,
-            "num_predict": 28 if lightweight else 60,
-            "num_ctx": 512 if lightweight else 768,
+            "temperature": 0.58 if not strict else 0.42,
+            "num_predict": 22 if lightweight else 52,
+            "num_ctx": 384 if lightweight else 640,
             "repeat_penalty": 1.15,
         }
-        # Keep compose to one LLM call for predictable latency under local CPU inference.
         text = self.adapter.text_completion(
             system=self._system_prompt(strict=strict),
             user=payload,
             options=options,
-            request_timeout_seconds=20 if lightweight else 28,
+            request_timeout_seconds=14 if lightweight else 22,
         )
         return self._extract_messages_from_text(text)
 
@@ -118,18 +123,36 @@ class ConversationComposer:
         )
 
     def _model_payload(self, *, brief: ReplyBrief, avoid_phrases: list[str], lightweight: bool) -> str:
-        recent_thread = brief.recent_thread[-(3 if lightweight else 6) :] or ["(no prior thread)"]
+        recent_thread = brief.recent_thread[-(2 if lightweight else 5) :] or ["(no prior thread)"]
         key_facts = brief.key_facts_to_include[: (2 if lightweight else 4)] or ["(none)"]
         tasks = (brief.active_task_context[:1] if lightweight else brief.active_task_context[:3]) or ["(none)"]
         deadlines = (brief.deadline_context[:1] if lightweight else brief.deadline_context[:3]) or ["(none)"]
         flags = (brief.current_state_flags[:1] if lightweight else brief.current_state_flags[:3]) or ["(none)"]
         notes = (brief.memory_notes[:1] if lightweight else brief.memory_notes[:2]) or ["(none)"]
-        avoid = avoid_phrases[:4] or ["(none)"]
+        avoid = avoid_phrases[:3] or ["(none)"]
         question = brief.question_if_needed or "(none)"
         next_step = brief.suggested_next_step or "(none)"
 
         def _lines(items: list[str]) -> str:
             return "\n".join(f"- {item}" for item in items)
+
+        if lightweight:
+            return (
+                f"user_message: {brief.latest_user_message}\n"
+                f"goal={brief.response_goal} tone={brief.style_mode} urgency={brief.urgency_level}\n"
+                f"reason={brief.operational_reason or '(none)'}\n"
+                f"facts={'; '.join(key_facts)}\n"
+                f"next_step={next_step}\n"
+                f"question={question}\n"
+                f"thread={' | '.join(recent_thread)}\n"
+                f"tasks={'; '.join(tasks)}\n"
+                f"deadlines={'; '.join(deadlines)}\n"
+                f"flags={'; '.join(flags)}\n"
+                f"notes={'; '.join(notes)}\n"
+                f"avoid_openers={'; '.join(avoid)}\n"
+                f"max_chunks={brief.max_chunks} max_chunk_length={brief.max_chunk_length}\n"
+                "Reply like a human text, answer directly, 1-3 short bubbles."
+            )
 
         payload = (
             f"LATEST USER MESSAGE:\n{brief.latest_user_message}\n\n"
@@ -154,8 +177,6 @@ class ConversationComposer:
             "- keep it human and text-like\n"
             "- never expose internal system labels\n"
         )
-        if lightweight:
-            return payload
         return payload
 
     @staticmethod
@@ -209,6 +230,49 @@ class ConversationComposer:
             "saw that.",
         ]
         digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
+        idx = int(digest[:8], 16) % len(options)
+        return options[idx]
+
+    def _repair_low_quality(self, *, brief: ReplyBrief, recent_assistant: list[str]) -> list[str] | None:
+        opening = self._repair_opening(brief.latest_user_message, recent_assistant)
+        clean_facts = [fact for fact in brief.key_facts_to_include if not fact.lower().startswith("user asked:")]
+        direct_fact = clean_facts[0] if clean_facts else ""
+
+        if brief.response_goal == "answer_question":
+            if direct_fact:
+                text = f"{direct_fact} {brief.question_if_needed or ''}".strip()
+            else:
+                text = f"{opening} i'm live and tracking this."
+        elif brief.response_goal == "react_to_progress":
+            step = brief.suggested_next_step or "what's the next concrete step?"
+            text = f"{opening} that's real progress. {step}"
+        elif brief.response_goal == "replan_blocker":
+            prompt = brief.question_if_needed or "what's the smallest move that gets this unstuck?"
+            text = f"{opening} let's keep it simple. {prompt}"
+        elif brief.should_ask_question and brief.question_if_needed:
+            text = f"{opening} {brief.question_if_needed}"
+        elif brief.suggested_next_step:
+            text = f"{opening} next move: {brief.suggested_next_step}"
+        elif direct_fact:
+            text = f"{opening} {direct_fact}"
+        else:
+            text = f"{opening} what's the main thing you want to lock in next?"
+
+        return self.chunker.chunk(
+            text,
+            max_chunk_length=brief.max_chunk_length,
+            max_chunks=min(brief.max_chunks, 2),
+        )
+
+    @staticmethod
+    def _repair_opening(seed: str, recent_assistant: list[str]) -> str:
+        options = [
+            "yep, got you.",
+            "i'm with you.",
+            "got it.",
+            "i see where you're at.",
+        ]
+        digest = hashlib.sha1(f"{seed}|{'|'.join(recent_assistant[-2:])}".encode("utf-8")).hexdigest()
         idx = int(digest[:8], 16) % len(options)
         return options[idx]
 

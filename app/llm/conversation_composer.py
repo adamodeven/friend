@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-from datetime import datetime, timezone
 
 from app.llm.client import OllamaAdapter
 from app.llm.message_chunker import MessageChunker
@@ -56,8 +55,8 @@ class ConversationComposer:
         text = self.adapter.text_completion(
             system=self._system_prompt(),
             user=payload,
-            options={"temperature": 0.65, "num_predict": 120},
-            request_timeout_seconds=14,
+            options={"temperature": 0.6, "num_predict": 90},
+            request_timeout_seconds=25,
         )
         return self._extract_messages_from_text(text)
 
@@ -75,20 +74,19 @@ class ConversationComposer:
 
     def _model_payload(self, *, brief: ReplyBrief, avoid_phrases: list[str]) -> str:
         compact = {
-            "generated_at": datetime.now(tz=timezone.utc).isoformat(),
             "latest_user_message": brief.latest_user_message,
             "response_goal": brief.response_goal,
             "operational_reason": brief.operational_reason,
             "urgency_level": brief.urgency_level,
             "style_mode": brief.style_mode,
-            "key_facts": brief.key_facts_to_include[:4],
+            "key_facts": brief.key_facts_to_include[:3],
             "question_if_needed": brief.question_if_needed,
             "suggested_next_step": brief.suggested_next_step,
-            "active_tasks": brief.active_task_context[:4],
-            "deadlines": brief.deadline_context[:4],
-            "state_flags": brief.current_state_flags[:3],
-            "memory_notes": brief.memory_notes[:3],
-            "recent_thread": brief.recent_thread[-6:],
+            "active_tasks": brief.active_task_context[:2],
+            "deadlines": brief.deadline_context[:2],
+            "state_flags": brief.current_state_flags[:2],
+            "memory_notes": brief.memory_notes[:1],
+            "recent_thread": brief.recent_thread[-3:],
             "constraints": {
                 "max_chunks": brief.max_chunks,
                 "max_chunk_length": brief.max_chunk_length,

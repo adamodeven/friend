@@ -13,10 +13,14 @@ class IntentExtractor:
         self.adapter = adapter or OllamaAdapter()
 
     def extract(self, text: str, timezone: str) -> IntentResult:
+        fallback = self._extract_fallback(text, timezone)
+        if fallback.intent in {"general_chat", "status_query", "context_signal"}:
+            return fallback
+
         llm_result = self._extract_with_llm(text, timezone)
         if llm_result:
             return llm_result
-        return self._extract_fallback(text, timezone)
+        return fallback
 
     def _extract_with_llm(self, text: str, timezone: str) -> IntentResult | None:
         payload = self.adapter.json_completion(

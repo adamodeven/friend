@@ -58,26 +58,6 @@ class OllamaAdapter:
             parsed = self._parse_json(content)
             if isinstance(parsed, dict):
                 return parsed
-
-        payload_chat = {
-            "model": model or self._text_model,
-            "stream": False,
-            "format": "json",
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
-        if options:
-            payload_chat["options"] = options
-        content = self._chat_content(payload_chat, request_timeout_seconds=request_timeout_seconds)
-        if content == "__chat_404__":
-            return None
-        if not content:
-            return None
-        parsed = self._parse_json(content)
-        if isinstance(parsed, dict):
-            return parsed
         return None
 
     def text_completion(
@@ -101,21 +81,7 @@ class OllamaAdapter:
         content = self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
         if content and content != "__generate_404__":
             return content
-
-        payload_chat = {
-            "model": model or self._text_model,
-            "stream": False,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
-        if options:
-            payload_chat["options"] = options
-        content = self._chat_content(payload_chat, request_timeout_seconds=request_timeout_seconds)
-        if not content or content == "__chat_404__":
-            return None
-        return content
+        return None
 
     def vision_json(
         self,

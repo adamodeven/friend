@@ -209,12 +209,14 @@ class ConversationComposer:
     def _fallback_messages(self, brief: ReplyBrief) -> list[str]:
         # Failure-only safety net; should not be the normal UX path.
         opening = self._fallback_opening(brief.latest_user_message)
-        if brief.should_ask_question and brief.question_if_needed:
+        if brief.response_goal == "answer_question" and brief.key_facts_to_include:
+            base = brief.key_facts_to_include[0]
+        elif brief.should_ask_question and brief.question_if_needed:
             base = f"{opening} {brief.question_if_needed}"
         elif brief.suggested_next_step:
             base = f"{opening} next move: {brief.suggested_next_step}"
         elif brief.key_facts_to_include:
-            base = f"{opening} i still captured this: {brief.key_facts_to_include[0]}"
+            base = f"{opening} {brief.key_facts_to_include[0]}"
         else:
             base = f"{opening} got the update. what's the next move?"
         return self.chunker.chunk(

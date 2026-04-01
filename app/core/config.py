@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     ollama_warmup_on_startup: bool = True
     ollama_intent_num_ctx: int = 512
     ollama_intent_num_predict: int = 96
+    ollama_option_num_gpu: int | None = None
+    ollama_option_main_gpu: int | None = None
+    ollama_option_num_thread: int | None = None
+    ollama_option_num_batch: int | None = None
+    ollama_option_low_vram: bool = False
 
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

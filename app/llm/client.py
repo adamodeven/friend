@@ -31,6 +31,7 @@ class OllamaAdapter:
             write=20.0,
             pool=5.0,
         )
+        self._default_options = self._build_default_options(settings)
         self._enabled = settings.llm_provider.lower() == "ollama"
 
     @property
@@ -61,8 +62,9 @@ class OllamaAdapter:
                 "prompt": f"{system}\n\n{user}",
                 "keep_alive": self._keep_alive,
             }
-            if options:
-                payload_generate["options"] = options
+            merged_options = self._merge_options(options)
+            if merged_options:
+                payload_generate["options"] = merged_options
             content = self._generate_content(payload_generate, request_timeout_seconds=per_attempt_timeout)
             if content == "__generate_404__":
                 saw_native_404 = True
@@ -132,8 +134,9 @@ class OllamaAdapter:
                 "prompt": f"{system}\n\n{user}",
                 "keep_alive": self._keep_alive,
             }
-            if options:
-                payload_generate["options"] = options
+            merged_options = self._merge_options(options)
+            if merged_options:
+                payload_generate["options"] = merged_options
             content = self._generate_content(payload_generate, request_timeout_seconds=per_attempt_timeout)
             if content == "__generate_404__":
                 saw_native_404 = True
@@ -195,6 +198,9 @@ class OllamaAdapter:
                 {"role": "user", "content": user_prompt, "images": [image_b64]},
             ],
         }
+        merged_options = self._merge_options(None)
+        if merged_options:
+            payload["options"] = merged_options
         content = self._chat_content(payload, request_timeout_seconds=request_timeout_seconds)
         if content == "__model_not_found__" and self._auto_pull_missing_models and self._pull_model(self._vision_model):
             content = self._chat_content(payload, request_timeout_seconds=request_timeout_seconds)
@@ -206,6 +212,8 @@ class OllamaAdapter:
                 "prompt": f"{system}\n\n{user_prompt}",
                 "images": [image_b64],
             }
+            if merged_options:
+                payload_generate["options"] = merged_options
             content = self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
             if content == "__model_not_found__" and self._auto_pull_missing_models and self._pull_model(self._vision_model):
                 content = self._generate_content(payload_generate, request_timeout_seconds=request_timeout_seconds)
@@ -414,3 +422,25 @@ class OllamaAdapter:
             except json.JSONDecodeError:
                 return None
         return None
+
+    @staticmethod
+    def _build_default_options(settings: Any) -> dict[str, Any]:
+        defaults: dict[str, Any] = {}
+        option_pairs = (
+            ("num_gpu", getattr(settings, "ollama_option_num_gpu", None)),
+            ("main_gpu", getattr(settings, "ollama_option_main_gpu", None)),
+            ("num_thread", getattr(settings, "ollama_option_num_thread", None)),
+            ("num_batch", getattr(settings, "ollama_option_num_batch", None)),
+        )
+        for key, value in option_pairs:
+            if value is not None:
+                defaults[key] = value
+        if bool(getattr(settings, "ollama_option_low_vram", False)):
+            defaults["low_vram"] = True
+        return defaults
+
+    def _merge_options(self, options: dict[str, Any] | None) -> dict[str, Any] | None:
+        merged = dict(getattr(self, "_default_options", {}) or {})
+        if options:
+            merged.update({key: value for key, value in options.items() if value is not None})
+        return merged or None

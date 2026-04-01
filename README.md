@@ -149,15 +149,20 @@ https://<your-domain>/webhooks/twilio
 If you have a GTX 1050, these settings are tuned for stable latency and VRAM limits:
 
 - `OLLAMA_TEXT_MODEL=llama3.2:1b`
-- `OLLAMA_CONTEXT_LENGTH=2048`
+- `OLLAMA_CONTEXT_LENGTH=1024`
 - `OLLAMA_NUM_PARALLEL=1`
 - `OLLAMA_MAX_LOADED_MODELS=1`
-- `OLLAMA_MAX_QUEUE=128`
+- `OLLAMA_MAX_QUEUE=64`
 - `OLLAMA_FLASH_ATTENTION=1`
-- `OLLAMA_KV_CACHE_TYPE=q8_0`
+- `OLLAMA_KV_CACHE_TYPE=q4_0`
 - `OLLAMA_DOCKER_RUNTIME=nvidia`
 - `NVIDIA_VISIBLE_DEVICES=all`
 - `NVIDIA_DRIVER_CAPABILITIES=compute,utility`
+- `OLLAMA_OPTION_NUM_GPU=999`
+- `OLLAMA_OPTION_MAIN_GPU=0`
+- `OLLAMA_OPTION_NUM_THREAD=4`
+- `OLLAMA_OPTION_NUM_BATCH=64`
+- `OLLAMA_OPTION_LOW_VRAM=true`
 
 ### Host prerequisites for Docker GPU acceleration
 
@@ -166,6 +171,8 @@ On Ubuntu host:
 ```bash
 sudo apt-get update
 sudo apt-get install -y nvidia-driver-535 nvidia-container-toolkit
+echo -e "blacklist nouveau\noptions nouveau modeset=0" | sudo tee /etc/modprobe.d/blacklist-nouveau.conf
+sudo update-initramfs -u
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 sudo reboot

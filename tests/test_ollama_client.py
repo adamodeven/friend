@@ -13,6 +13,7 @@ def _adapter_for_test() -> OllamaAdapter:
     adapter._native_api_available = None
     adapter._openai_compat_available = None
     adapter._base_url = "http://ollama:11434"
+    adapter._default_options = {}
     return adapter
 
 
@@ -100,3 +101,30 @@ def test_text_completion_retries_after_model_not_found_when_auto_pull_enabled():
 
     result = adapter.text_completion(system="s", user="u", request_timeout_seconds=18)
     assert result == "ready after pull"
+
+
+def test_text_completion_merges_runtime_defaults_with_call_options():
+    adapter = _adapter_for_test()
+    adapter._default_options = {"num_thread": 4, "low_vram": True}
+    captured: dict[str, object] = {}
+
+    def fake_generate(payload, *, request_timeout_seconds=None):  # noqa: ANN001
+        captured["options"] = payload.get("options")
+        return "ok"
+
+    adapter._generate_content = fake_generate  # type: ignore[attr-defined]
+
+    result = adapter.text_completion(
+        system="s",
+        user="u",
+        options={"temperature": 0.4, "num_predict": 20},
+        request_timeout_seconds=10,
+    )
+
+    assert result == "ok"
+    assert captured["options"] == {
+        "num_thread": 4,
+        "low_vram": True,
+        "temperature": 0.4,
+        "num_predict": 20,
+    }

@@ -59,6 +59,11 @@ class ReplyBriefBuilder:
         if outcome.response_goal in {"answer_question", "open_conversation", "acknowledge_context"} and not wants_task_context:
             active_task_context = []
             deadline_context = []
+        if outcome.response_goal == "acknowledge_new_task":
+            # Avoid contaminating acknowledgements with unrelated active-task context.
+            # The brief already has the newly captured task fact + next step.
+            active_task_context = []
+            deadline_context = []
         if short_checkin:
             active_task_context = []
             deadline_context = []

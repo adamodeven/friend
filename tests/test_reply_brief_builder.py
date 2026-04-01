@@ -109,3 +109,29 @@ def test_short_checkin_brief_marks_flag_and_limits_thread(db_session):
     )
     assert brief.is_short_checkin is True
     assert len(brief.recent_thread) <= 3
+
+
+def test_acknowledge_new_task_brief_omits_unrelated_active_context(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    db_session.add_all(
+        [
+            Task(user_id=user.id, title="I get everything working for you by tonight", status=TaskStatus.active, priority=1),
+            Task(user_id=user.id, title="Another active item", status=TaskStatus.active, priority=2),
+        ]
+    )
+    db_session.commit()
+
+    builder = ReplyBriefBuilder()
+    outcome = StateOutcome(
+        response_goal="acknowledge_new_task",
+        key_facts_to_include=["task captured: submit scout job application"],
+        suggested_next_step="do a final proofread, then submit scout job application",
+    )
+    brief = builder.build(
+        db_session,
+        user=user,
+        latest_user_message="tmr morning i need to submit my scout job application",
+        outcome=outcome,
+    )
+    assert brief.active_task_context == []
+    assert brief.deadline_context == []

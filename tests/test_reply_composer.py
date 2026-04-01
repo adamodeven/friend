@@ -186,6 +186,17 @@ def test_composer_repairs_when_output_leaks_markdown_quote_list():
     assert '* "' not in lowered
 
 
+def test_composer_repairs_when_output_leaks_internal_colon_prefix():
+    adapter = FakeAdapter(["internal: task_manager: what's up yo whatup"], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("yo whatup", short_checkin=True))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "internal:" not in lowered
+    assert "task_manager:" not in lowered
+
+
 def test_composer_repairs_when_output_leaks_instructional_phrase():
     adapter = FakeAdapter(["be direct about whether this reply is live-generated right now"], enabled=True)
     composer = ConversationComposer(adapter=adapter)

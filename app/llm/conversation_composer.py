@@ -348,6 +348,8 @@ class ConversationComposer:
             "open conversational message received",
             "general chat intent",
             "intent=",
+            "internal:",
+            "task_manager:",
             "response_goal",
             "tiny compose hiccup",
             "generation miss",
@@ -386,6 +388,8 @@ class ConversationComposer:
         if cls._looks_hard_structured_leak(lowered):
             return True
         if re.search(r"(^|\n)\s*(#{1,6}|\*\*|\*\s+|-\s+|\d+\.)", candidate):
+            return True
+        if re.search(r"^\s*[a-z_]+\s*:\s*[a-z_]+\s*:", lowered):
             return True
         if "```" in candidate:
             return True
@@ -547,6 +551,8 @@ class ConversationComposer:
 
         if brief.response_goal == "acknowledge_new_task":
             if "what's on your mind?" in combined:
+                return True
+            if re.search(r"^\s*[a-z_]+\s*:\s*[a-z_]+\s*:", combined):
                 return True
             if "captured" not in combined and "next move" not in combined and "submit" not in combined and "deadline" not in combined:
                 return True

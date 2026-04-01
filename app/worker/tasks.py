@@ -52,6 +52,13 @@ def process_inbound_sms_task(payload_data: dict[str, Any]) -> dict[str, Any]:
                     payload.from_number,
                     send_exc,
                 )
+        if send_failures:
+            logger.warning(
+                "inbound processed with partial outbound failure sid=%s sent=%s failed=%s",
+                payload.message_sid,
+                sent,
+                send_failures,
+            )
         return {
             "skipped_duplicate": False,
             "message_sid": payload.message_sid,

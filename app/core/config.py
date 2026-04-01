@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     openai_fallback_text_model: str = "gpt-5.4-nano"
     openai_vision_model: str = "gpt-5.4-mini"
     openai_timeout_seconds: int = 45
+    openai_fallback_to_ollama: bool = True
 
     ollama_base_url: str = "http://localhost:11434"
     ollama_text_model: str = "llama3.2:1b"

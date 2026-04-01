@@ -7,15 +7,22 @@ def _adapter_for_test() -> OllamaAdapter:
     adapter = object.__new__(OllamaAdapter)
     adapter._enabled = True
     adapter._provider = "ollama"
+    adapter._openai_fallback_to_ollama = True
     adapter._text_model = "slow-model"
     adapter._fallback_text_model = "fast-model"
+    adapter._ollama_text_model = "slow-model"
+    adapter._ollama_fallback_text_model = "fast-model"
+    adapter._ollama_vision_model = "vision-model"
     adapter._keep_alive = "30m"
     adapter._auto_pull_missing_models = False
     adapter._native_api_available = None
     adapter._openai_compat_available = None
     adapter._base_url = "http://ollama:11434"
+    adapter._ollama_base_url = "http://ollama:11434"
     adapter._api_key = ""
     adapter._default_options = {}
+    adapter._ollama_default_options = {}
+    adapter._timeout = None
     return adapter
 
 
@@ -23,11 +30,21 @@ def _openai_adapter_for_test() -> OllamaAdapter:
     adapter = object.__new__(OllamaAdapter)
     adapter._enabled = True
     adapter._provider = "openai"
+    adapter._openai_fallback_to_ollama = True
     adapter._text_model = "openai-slow"
     adapter._fallback_text_model = "openai-fast"
     adapter._vision_model = "openai-vision"
     adapter._base_url = "https://api.openai.com/v1"
     adapter._api_key = "sk-test"
+    adapter._keep_alive = "30m"
+    adapter._auto_pull_missing_models = False
+    adapter._native_api_available = None
+    adapter._openai_compat_available = None
+    adapter._ollama_base_url = "http://ollama:11434"
+    adapter._ollama_text_model = "ollama-main"
+    adapter._ollama_fallback_text_model = "ollama-fallback"
+    adapter._ollama_vision_model = "ollama-vision"
+    adapter._ollama_default_options = {}
     adapter._default_options = {}
     adapter._timeout = None
     return adapter
@@ -37,13 +54,13 @@ def test_text_completion_falls_back_to_secondary_model():
     adapter = _adapter_for_test()
     calls: list[tuple[str, float | None]] = []
 
-    def fake_generate(payload, *, request_timeout_seconds=None):  # noqa: ANN001
+    def fake_generate(base_url, payload, *, request_timeout_seconds=None):  # noqa: ANN001
         calls.append((payload["model"], request_timeout_seconds))
         if payload["model"] == "slow-model":
             return None
         return "yo this is live"
 
-    adapter._generate_content = fake_generate  # type: ignore[attr-defined]
+    adapter._generate_content_for_base = fake_generate  # type: ignore[attr-defined]
 
     result = adapter.text_completion(system="s", user="u", request_timeout_seconds=30)
     assert result == "yo this is live"
@@ -56,13 +73,13 @@ def test_json_completion_falls_back_and_parses():
     adapter = _adapter_for_test()
     calls: list[str] = []
 
-    def fake_generate(payload, *, request_timeout_seconds=None):  # noqa: ANN001
+    def fake_generate(base_url, payload, *, request_timeout_seconds=None):  # noqa: ANN001
         calls.append(payload["model"])
         if payload["model"] == "slow-model":
             return None
         return '{"intent":"general_chat","confidence":0.88}'
 
-    adapter._generate_content = fake_generate  # type: ignore[attr-defined]
+    adapter._generate_content_for_base = fake_generate  # type: ignore[attr-defined]
 
     result = adapter.json_completion(system="s", user="u", request_timeout_seconds=24)
     assert result is not None
@@ -70,38 +87,12 @@ def test_json_completion_falls_back_and_parses():
     assert calls == ["slow-model", "fast-model"]
 
 
-def test_text_completion_uses_openai_compat_when_native_returns_404():
-    adapter = _adapter_for_test()
-
-    def fake_generate(payload, *, request_timeout_seconds=None):  # noqa: ANN001
-        return "__generate_404__"
-
-    def fake_openai_chat_completion(  # noqa: ANN001
-        *,
-        system,
-        user,
-        model,
-        options=None,
-        images=None,
-        request_timeout_seconds=None,
-    ):
-        if model == "slow-model":
-            return None
-        return "yep live now"
-
-    adapter._generate_content = fake_generate  # type: ignore[attr-defined]
-    adapter._openai_chat_completion = fake_openai_chat_completion  # type: ignore[attr-defined]
-
-    result = adapter.text_completion(system="s", user="u", request_timeout_seconds=18)
-    assert result == "yep live now"
-
-
 def test_text_completion_retries_after_model_not_found_when_auto_pull_enabled():
     adapter = _adapter_for_test()
     adapter._auto_pull_missing_models = True
     seen = {"count": 0}
 
-    def fake_generate(payload, *, request_timeout_seconds=None):  # noqa: ANN001
+    def fake_generate(base_url, payload, *, request_timeout_seconds=None):  # noqa: ANN001
         if payload["model"] == "slow-model":
             return None
         seen["count"] += 1
@@ -109,10 +100,10 @@ def test_text_completion_retries_after_model_not_found_when_auto_pull_enabled():
             return "__model_not_found__"
         return "ready after pull"
 
-    def fake_pull_model(model):  # noqa: ANN001
+    def fake_pull_model(model, *, base_url=None):  # noqa: ANN001
         return model == "fast-model"
 
-    adapter._generate_content = fake_generate  # type: ignore[attr-defined]
+    adapter._generate_content_for_base = fake_generate  # type: ignore[attr-defined]
     adapter._pull_model = fake_pull_model  # type: ignore[attr-defined]
 
     result = adapter.text_completion(system="s", user="u", request_timeout_seconds=18)
@@ -122,13 +113,14 @@ def test_text_completion_retries_after_model_not_found_when_auto_pull_enabled():
 def test_text_completion_merges_runtime_defaults_with_call_options():
     adapter = _adapter_for_test()
     adapter._default_options = {"num_thread": 4, "low_vram": True}
+    adapter._ollama_default_options = {"num_thread": 4, "low_vram": True}
     captured: dict[str, object] = {}
 
-    def fake_generate(payload, *, request_timeout_seconds=None):  # noqa: ANN001
+    def fake_generate(base_url, payload, *, request_timeout_seconds=None):  # noqa: ANN001
         captured["options"] = payload.get("options")
         return "ok"
 
-    adapter._generate_content = fake_generate  # type: ignore[attr-defined]
+    adapter._generate_content_for_base = fake_generate  # type: ignore[attr-defined]
 
     result = adapter.text_completion(
         system="s",
@@ -190,3 +182,27 @@ def test_openai_provider_json_completion_parses_payload():
     result = adapter.json_completion(system="s", user="u", request_timeout_seconds=20)
     assert result is not None
     assert result["intent"] == "add_task"
+
+
+def test_openai_provider_falls_back_to_ollama_when_rate_limited():
+    adapter = _openai_adapter_for_test()
+
+    def fake_openai_chat_completion(  # noqa: ANN001
+        *,
+        system,
+        user,
+        model,
+        options=None,
+        images=None,
+        request_timeout_seconds=None,
+    ):
+        return "__rate_limited__"
+
+    def fake_ollama_text_completion(**kwargs):  # noqa: ANN003,ANN201
+        return "ollama fallback reply"
+
+    adapter._openai_chat_completion = fake_openai_chat_completion  # type: ignore[attr-defined]
+    adapter._ollama_text_completion = fake_ollama_text_completion  # type: ignore[attr-defined]
+
+    result = adapter.text_completion(system="s", user="u", request_timeout_seconds=20)
+    assert result == "ollama fallback reply"

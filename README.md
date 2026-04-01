@@ -146,6 +146,7 @@ This repo now defaults to `LLM_PROVIDER=openai`.
   - `OPENAI_FALLBACK_TEXT_MODEL=gpt-5.4-nano`
   - `OPENAI_VISION_MODEL=gpt-5.4-mini`
 - `OPENAI_TIMEOUT_SECONDS=45`
+- `OPENAI_FALLBACK_TO_OLLAMA=true` keeps replies alive if OpenAI is rate-limited or temporarily unavailable
 
 ### Ollama setup (optional, still fully supported)
 

@@ -47,7 +47,11 @@ class ConversationComposer:
             return None, False
 
         combined = " ".join(messages)
-        if self._looks_internal_or_robotic(combined) or self._looks_low_quality(combined, brief.latest_user_message):
+        if (
+            self._looks_internal_or_robotic(combined)
+            or self._looks_low_quality(combined, brief.latest_user_message)
+            or self._has_parrot_bubble(messages, brief.latest_user_message)
+        ):
             retry = self._generate_messages(
                 brief=brief,
                 avoid_phrases=avoid_phrases + self._quality_banned_openers(),
@@ -90,6 +94,7 @@ class ConversationComposer:
             "Sound like a real person texting: casual, modern, sharp, socially fluent, concise. "
             "Never robotic, corporate, therapist-y, or generic productivity-bot language. "
             "If user asks what you do or whether replies are canned/live, answer directly in plain language first. "
+            "For small-talk or quick checks, do not mirror the user's exact words back. "
             "No em dashes, no markdown, no labels, no numbering. "
             "Answer what the user actually said, in context, and keep momentum. "
             "Use 1-3 message bubbles max, each short. "
@@ -222,3 +227,17 @@ class ConversationComposer:
     def _normalize_text(text: str) -> str:
         cleaned = re.sub(r"[^a-z0-9\s]+", " ", text.lower())
         return " ".join(cleaned.split())
+
+    @classmethod
+    def _has_parrot_bubble(cls, messages: list[str], latest_user_message: str) -> bool:
+        user_norm = cls._normalize_text(latest_user_message)
+        if not user_norm:
+            return False
+        for bubble in messages[:3]:
+            bubble_norm = cls._normalize_text(bubble)
+            if not bubble_norm:
+                continue
+            ratio = SequenceMatcher(a=bubble_norm, b=user_norm).ratio()
+            if ratio >= 0.88 and len(bubble_norm.split()) <= 14:
+                return True
+        return False

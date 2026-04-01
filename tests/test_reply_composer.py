@@ -135,3 +135,18 @@ def test_composer_regenerates_when_it_parrots_user_message():
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
     assert "what do you want to knock out first?" in " ".join(reply.messages).lower()
+
+
+def test_composer_regenerates_when_first_bubble_parrots_user():
+    adapter = FakeAdapter(
+        [
+            "are you actually live now\n\nyeah i'm tracking everything.",
+            "yep i'm live and tracking. what's the move right now?",
+        ],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("are you actually live now"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    assert not any(msg.strip().lower() == "are you actually live now" for msg in reply.messages)

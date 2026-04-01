@@ -10,6 +10,8 @@ def warmup_ollama_text_model(*, logger: logging.Logger | None = None) -> bool:
     settings = get_settings()
     if not settings.ollama_warmup_on_startup:
         return False
+    if settings.llm_provider.lower().strip() != "ollama":
+        return False
 
     adapter = OllamaAdapter()
     if not adapter.enabled:

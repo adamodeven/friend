@@ -20,7 +20,7 @@ def test_warmup_skips_when_disabled(monkeypatch):
     monkeypatch.setattr(
         warmup_module,
         "get_settings",
-        lambda: SimpleNamespace(ollama_warmup_on_startup=False),
+        lambda: SimpleNamespace(ollama_warmup_on_startup=False, llm_provider="ollama"),
     )
     called = {"adapter": 0}
 
@@ -37,9 +37,26 @@ def test_warmup_runs_when_enabled(monkeypatch):
     monkeypatch.setattr(
         warmup_module,
         "get_settings",
-        lambda: SimpleNamespace(ollama_warmup_on_startup=True),
+        lambda: SimpleNamespace(ollama_warmup_on_startup=True, llm_provider="ollama"),
     )
     adapter = _FakeAdapter(enabled=True, text="ok")
     monkeypatch.setattr(warmup_module, "OllamaAdapter", lambda: adapter)
     assert warmup_module.warmup_ollama_text_model() is True
     assert adapter.calls == 1
+
+
+def test_warmup_skips_for_non_ollama_provider(monkeypatch):
+    monkeypatch.setattr(
+        warmup_module,
+        "get_settings",
+        lambda: SimpleNamespace(ollama_warmup_on_startup=True, llm_provider="openai"),
+    )
+    called = {"adapter": 0}
+
+    def _adapter_factory():
+        called["adapter"] += 1
+        return _FakeAdapter(enabled=True)
+
+    monkeypatch.setattr(warmup_module, "OllamaAdapter", _adapter_factory)
+    assert warmup_module.warmup_ollama_text_model() is False
+    assert called["adapter"] == 0

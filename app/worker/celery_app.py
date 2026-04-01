@@ -37,4 +37,6 @@ celery_app.conf.timezone = settings.timezone
 
 @worker_ready.connect
 def _warmup_llm_on_worker_start(**_kwargs) -> None:
+    if settings.llm_provider.lower().strip() != "ollama":
+        return
     warmup_ollama_text_model(logger=logger)

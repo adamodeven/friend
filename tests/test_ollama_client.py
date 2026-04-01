@@ -6,6 +6,7 @@ from app.llm.client import OllamaAdapter
 
 
 def _adapter_for_test() -> OllamaAdapter:
+    OllamaAdapter._shared_openai_rate_limited_until = None
     adapter = object.__new__(OllamaAdapter)
     adapter._enabled = True
     adapter._provider = "ollama"
@@ -31,6 +32,7 @@ def _adapter_for_test() -> OllamaAdapter:
 
 
 def _openai_adapter_for_test() -> OllamaAdapter:
+    OllamaAdapter._shared_openai_rate_limited_until = None
     adapter = object.__new__(OllamaAdapter)
     adapter._enabled = True
     adapter._provider = "openai"
@@ -238,6 +240,38 @@ def test_openai_rate_limit_sets_cooldown_and_skips_openai_next_call():
 
     first = adapter.text_completion(system="s", user="u")
     second = adapter.text_completion(system="s", user="u again")
+    assert first == "ollama fallback reply"
+    assert second == "ollama fallback reply"
+    assert openai_calls["count"] == 1
+
+
+def test_openai_cooldown_is_shared_across_adapter_instances():
+    adapter_a = _openai_adapter_for_test()
+    adapter_b = _openai_adapter_for_test()
+    openai_calls = {"count": 0}
+
+    def fake_openai_chat_completion(  # noqa: ANN001
+        *,
+        system,
+        user,
+        model,
+        options=None,
+        images=None,
+        request_timeout_seconds=None,
+    ):
+        openai_calls["count"] += 1
+        return "__rate_limited__"
+
+    def fake_ollama_text_completion(**kwargs):  # noqa: ANN003,ANN201
+        return "ollama fallback reply"
+
+    adapter_a._openai_chat_completion = fake_openai_chat_completion  # type: ignore[attr-defined]
+    adapter_a._ollama_text_completion = fake_ollama_text_completion  # type: ignore[attr-defined]
+    adapter_b._openai_chat_completion = fake_openai_chat_completion  # type: ignore[attr-defined]
+    adapter_b._ollama_text_completion = fake_ollama_text_completion  # type: ignore[attr-defined]
+
+    first = adapter_a.text_completion(system="s", user="u")
+    second = adapter_b.text_completion(system="s", user="u2")
     assert first == "ollama fallback reply"
     assert second == "ollama fallback reply"
     assert openai_calls["count"] == 1

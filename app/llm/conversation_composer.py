@@ -481,9 +481,13 @@ class ConversationComposer:
             "be direct about whether this reply is live-generated right now",
             "confirm current system status plainly",
             "i'm here assistant",
+            "i'm here to help",
+            "i am here to help",
             "what's on your mind?",
             "how can i assist",
             "i'm available to help",
+            "under control",
+            "can i unblock it for you",
         ]
 
     @staticmethod
@@ -537,6 +541,8 @@ class ConversationComposer:
         if "actual response from me" in lowered:
             return True
         if "canned template" in lowered:
+            return True
+        if "i'm here to help you" in lowered or "i am here to help you" in lowered:
             return True
         if lowered.count("next move:") > 1:
             return True
@@ -766,6 +772,20 @@ class ConversationComposer:
             if "captured" not in combined and "next move" not in combined:
                 return True
 
+        if brief.response_goal == "confirm_update":
+            if not any(marker in combined for marker in ("updated", "cleared", "noted", "applied", "archived", "done", "marked")):
+                return True
+            if "under control" in combined:
+                return True
+
+        if brief.response_goal == "replan_blocker":
+            if not any(marker in combined for marker in ("blocker", "unblock", "unstick", "next move", "first")):
+                return True
+
+        if brief.response_goal == "timeline_summary":
+            if not any(marker in combined for marker in ("today", "tonight", "tomorrow", "week", "due")):
+                return True
+
         if brief.response_goal == "open_conversation":
             if "status active" in combined:
                 return True
@@ -778,6 +798,8 @@ class ConversationComposer:
                     return True
             lowered_user = brief.latest_user_message.lower()
             if "what i do" in combined and not any(token in lowered_user for token in ["what do", "what can", "are you", "do you"]):
+                return True
+            if "i'm here to help" in combined or "under control" in combined:
                 return True
 
         return False

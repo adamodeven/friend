@@ -353,6 +353,29 @@ def test_acknowledge_new_task_repairs_conjunction_lead_and_submit_duplication():
     assert "next move:" in lowered or "captured" in lowered
 
 
+def test_confirm_update_repairs_generic_support_bot_phrase():
+    adapter = FakeAdapter(
+        [
+            "you're on time for tonight. i've got everything under control.",
+            "got it. cleared active task list and archived the current queue.",
+        ],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="confirm_update",
+            latest_user_message="clear all tasks",
+            key_facts_to_include=["cleared active task list (4 archived)"],
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "under control" not in lowered
+
+
 def test_acknowledge_new_task_repairs_repeated_next_move_clause():
     adapter = FakeAdapter(
         ["i got you. captured. next move: do a final proofread, then submit scout job application next move: do a final proofread, then submit scout job application"],

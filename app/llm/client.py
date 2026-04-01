@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 class OllamaAdapter:
+    _shared_openai_rate_limited_until: datetime | None = None
+
     def __init__(self) -> None:
         settings = get_settings()
         self._settings = settings
@@ -24,7 +26,7 @@ class OllamaAdapter:
         self._openai_rate_limit_cooldown = timedelta(
             seconds=max(0, int(getattr(settings, "openai_rate_limit_cooldown_seconds", 300)))
         )
-        self._openai_rate_limited_until: datetime | None = None
+        self._openai_rate_limited_until: datetime | None = self.__class__._shared_openai_rate_limited_until
         self._native_api_available: bool | None = None
         self._openai_compat_available: bool | None = None
         self._ollama_base_url = settings.ollama_base_url.rstrip("/")
@@ -559,12 +561,18 @@ class OllamaAdapter:
     def _mark_openai_rate_limited(self) -> None:
         if self._openai_rate_limit_cooldown.total_seconds() <= 0:
             return
-        self._openai_rate_limited_until = datetime.now(tz=timezone.utc) + self._openai_rate_limit_cooldown
+        until = datetime.now(tz=timezone.utc) + self._openai_rate_limit_cooldown
+        self._openai_rate_limited_until = until
+        self.__class__._shared_openai_rate_limited_until = until
 
     def _clear_openai_rate_limit(self) -> None:
         self._openai_rate_limited_until = None
+        self.__class__._shared_openai_rate_limited_until = None
 
     def _is_openai_in_cooldown(self) -> bool:
+        shared = self.__class__._shared_openai_rate_limited_until
+        if shared is not None:
+            self._openai_rate_limited_until = shared
         if not self._openai_rate_limited_until:
             return False
         return datetime.now(tz=timezone.utc) < self._openai_rate_limited_until

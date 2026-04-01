@@ -231,14 +231,21 @@ class StateEngine:
 
     @staticmethod
     def _default_next_step(task_title: str) -> str:
-        lowered = task_title.lower()
+        title = task_title.strip()
+        lowered = title.lower()
+        if lowered.startswith("submit "):
+            return f"do a final proofread, then {title[0].lower() + title[1:]}"
         if "submit" in lowered:
-            return f"do a final proofread, then submit {task_title}"
+            return f"do a final proofread, then submit {title}"
+        if lowered.startswith("send "):
+            return title
         if "send" in lowered or "email" in lowered:
-            return f"send {task_title}"
+            return f"send {title}"
+        if lowered.startswith("finish "):
+            return title
         if "finish" in lowered:
-            return f"finish the first complete pass on {task_title}"
-        return f"start a 20-min first pass on {task_title}"
+            return f"finish the first complete pass on {title}"
+        return f"start a 20-min first pass on {title}"
 
     @staticmethod
     def _should_offer_checkpoints(*, task_title: str, raw_text: str, suggested_next_step: str | None) -> bool:

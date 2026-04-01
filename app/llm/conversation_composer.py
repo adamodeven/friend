@@ -377,6 +377,8 @@ class ConversationComposer:
             "confirm current system status plainly",
             "i'm here assistant",
             "what's on your mind?",
+            "how can i assist",
+            "i'm available to help",
         ]
 
     @staticmethod
@@ -428,6 +430,10 @@ class ConversationComposer:
         if "|" in candidate:
             return True
         if "actual response from me" in lowered:
+            return True
+        if lowered.count("next move:") > 1:
+            return True
+        if cls._has_repeated_long_phrase(lowered):
             return True
         tail_word = lowered.rstrip(" .!?").split(" ")[-1] if lowered else ""
         if not re.search(r"[.!?]['\"]?$", candidate.strip()) and tail_word in {
@@ -484,6 +490,8 @@ class ConversationComposer:
                 return True
             overlap_ratio = cls._lexical_overlap_ratio(bubble_norm, user_norm)
             if len(user_words) >= 6 and overlap_ratio >= 0.78:
+                return True
+            if len(user_words) <= 3 and user_norm in bubble_norm and len(bubble_norm.split()) <= 4:
                 return True
         return False
 
@@ -708,3 +716,16 @@ class ConversationComposer:
             return 0.0
         shared = words_a.intersection(words_b)
         return len(shared) / float(min(len(words_a), len(words_b)))
+
+    @staticmethod
+    def _has_repeated_long_phrase(text: str) -> bool:
+        words = [w for w in re.findall(r"[a-z0-9']+", text.lower()) if w]
+        if len(words) < 10:
+            return False
+        for window in (6, 5):
+            if len(words) < window * 2:
+                continue
+            for i in range(0, len(words) - (window * 2) + 1):
+                if words[i : i + window] == words[i + window : i + (window * 2)]:
+                    return True
+        return False

@@ -168,6 +168,17 @@ def test_composer_repairs_when_output_leaks_actual_response_wrapper():
     assert "what's on your mind?" not in lowered
 
 
+def test_composer_repairs_when_output_uses_support_bot_assist_language():
+    adapter = FakeAdapter(["no hey i'm available to help you with your scout job application. how can i assist?"], enabled=True)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(_brief("no why would i break that up"))
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "how can i assist" not in lowered
+    assert "available to help" not in lowered
+
+
 def test_composer_repairs_when_output_leaks_parenthesized_key_value_dump():
     adapter = FakeAdapter(["tasks=(none) deadlines=(tonight) next_step=finish_bot"], enabled=True)
     composer = ConversationComposer(adapter=adapter)
@@ -287,6 +298,26 @@ def test_acknowledge_new_task_repairs_conjunction_lead_and_submit_duplication():
     assert lowered.startswith("and ") is False
     assert "submit i submit" not in lowered
     assert "next move:" in lowered or "captured" in lowered
+
+
+def test_acknowledge_new_task_repairs_repeated_next_move_clause():
+    adapter = FakeAdapter(
+        ["i got you. captured. next move: do a final proofread, then submit scout job application next move: do a final proofread, then submit scout job application"],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="acknowledge_new_task",
+            latest_user_message="and then tmr morning i need to submit my scout job application",
+            suggested_next_step="do a final proofread, then submit scout job application",
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert lowered.count("next move:") <= 1
 
 
 def test_composer_repairs_when_output_leaks_instructional_phrase():

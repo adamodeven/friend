@@ -93,3 +93,10 @@ def test_single_add_task_does_not_force_checkpoint_question(db_session):
     assert outcome.should_ask_question is False
     assert outcome.question_if_needed is None
     assert "final proofread" in (outcome.suggested_next_step or "").lower()
+
+
+def test_default_next_step_does_not_repeat_submit_for_submit_titles():
+    step = StateEngine._default_next_step("Submit my scout job application")
+    lowered = step.lower()
+    assert "submit submit" not in lowered
+    assert lowered.startswith("do a final proofread, then submit my scout job application")

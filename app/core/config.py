@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     ollama_keep_alive: str = "30m"
     ollama_auto_pull_missing_models: bool = True
     ollama_warmup_on_startup: bool = True
+    ollama_intent_num_ctx: int = 512
+    ollama_intent_num_predict: int = 96
 
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

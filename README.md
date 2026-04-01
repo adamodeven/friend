@@ -139,9 +139,47 @@ https://<your-domain>/webhooks/twilio
 - `OLLAMA_TIMEOUT_SECONDS=45` default favors fail-fast behavior on CPU-only hosts.
 - `OLLAMA_AUTO_PULL_MISSING_MODELS=true` auto-recovers if a configured model is missing.
 - `OLLAMA_WARMUP_ON_STARTUP=true` pre-warms the text model on API/worker startup to reduce first-message latency.
+- `OLLAMA_INTENT_NUM_CTX=512` and `OLLAMA_INTENT_NUM_PREDICT=96` keep intent extraction fast for short SMS.
 - Model pull is automated by the `ollama-init` compose service.
 - For low-RAM/CPU hosts, keep `OLLAMA_TEXT_MODEL=llama3.2:1b` for better SMS reliability.
 - `WORKER_CONCURRENCY=1` is recommended for one-user CPU boxes to reduce inference contention.
+
+### GPU profile (GTX 1050 friendly)
+
+If you have a GTX 1050, these settings are tuned for stable latency and VRAM limits:
+
+- `OLLAMA_TEXT_MODEL=llama3.2:1b`
+- `OLLAMA_CONTEXT_LENGTH=2048`
+- `OLLAMA_NUM_PARALLEL=1`
+- `OLLAMA_MAX_LOADED_MODELS=1`
+- `OLLAMA_MAX_QUEUE=128`
+- `OLLAMA_FLASH_ATTENTION=1`
+- `OLLAMA_KV_CACHE_TYPE=q8_0`
+- `OLLAMA_DOCKER_RUNTIME=nvidia`
+- `NVIDIA_VISIBLE_DEVICES=all`
+- `NVIDIA_DRIVER_CAPABILITIES=compute,utility`
+
+### Host prerequisites for Docker GPU acceleration
+
+On Ubuntu host:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y nvidia-driver-535 nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+sudo reboot
+```
+
+After reboot, verify:
+
+```bash
+nvidia-smi
+docker run --rm --gpus=all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+docker exec friend-ollama ollama ps
+```
+
+`ollama ps` should show processor usage on GPU (not CPU-only).
 
 ## 7) Simulate Inbound Messages
 
@@ -243,6 +281,17 @@ Required for production:
 - `OLLAMA_TIMEOUT_SECONDS`
 - `OLLAMA_AUTO_PULL_MISSING_MODELS`
 - `OLLAMA_WARMUP_ON_STARTUP`
+- `OLLAMA_CONTEXT_LENGTH`
+- `OLLAMA_NUM_PARALLEL`
+- `OLLAMA_MAX_LOADED_MODELS`
+- `OLLAMA_MAX_QUEUE`
+- `OLLAMA_FLASH_ATTENTION`
+- `OLLAMA_KV_CACHE_TYPE`
+- `OLLAMA_DOCKER_RUNTIME`
+- `NVIDIA_VISIBLE_DEVICES`
+- `NVIDIA_DRIVER_CAPABILITIES`
+- `OLLAMA_INTENT_NUM_CTX`
+- `OLLAMA_INTENT_NUM_PREDICT`
 - `WORKER_CONCURRENCY`
 - `ADMIN_TOKEN`
 - `USER_PHONE_NUMBER`

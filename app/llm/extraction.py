@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 
 from app.core.time_utils import parse_human_time
+from app.core.config import get_settings
 from app.llm.client import OllamaAdapter
 from app.schemas.intent import ExtractedTask, IntentResult, IntentName, ImageExtractionResult
 
@@ -11,6 +12,7 @@ from app.schemas.intent import ExtractedTask, IntentResult, IntentName, ImageExt
 class IntentExtractor:
     def __init__(self, adapter: OllamaAdapter | None = None) -> None:
         self.adapter = adapter or OllamaAdapter()
+        self.settings = get_settings()
 
     def extract(self, text: str, timezone: str) -> IntentResult:
         fallback = self._extract_fallback(text, timezone)
@@ -34,7 +36,11 @@ class IntentExtractor:
                 f"message={text}\n"
                 "task should be object with: title, description, project, deadline_text, priority, confidence, next_step."
             ),
-            options={"temperature": 0.1, "num_predict": 120},
+            options={
+                "temperature": 0.1,
+                "num_predict": self.settings.ollama_intent_num_predict,
+                "num_ctx": self.settings.ollama_intent_num_ctx,
+            },
             request_timeout_seconds=8,
         )
         if not payload:

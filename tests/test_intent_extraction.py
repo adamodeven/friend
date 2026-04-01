@@ -87,9 +87,20 @@ def test_fallback_task_title_removes_leading_i_need_to_noise():
 def test_high_confidence_add_task_still_attempts_llm_before_fallback():
     adapter = _CountingAdapter()
     extractor = IntentExtractor(adapter=adapter)
-    result = extractor.extract("i need to submit the application tomorrow morning", "America/New_York")
+    result = extractor.extract(
+        "i need to submit the application tomorrow morning and then prepare slides for class",
+        "America/New_York",
+    )
     assert result.intent == "add_task"
     assert adapter.json_calls >= 1
+
+
+def test_simple_single_task_short_circuits_llm_for_latency():
+    adapter = _CountingAdapter()
+    extractor = IntentExtractor(adapter=adapter)
+    result = extractor.extract("i need to submit the application tomorrow morning", "America/New_York")
+    assert result.intent == "add_task"
+    assert adapter.json_calls == 0
 
 
 def test_high_confidence_context_signal_short_circuits_llm_for_latency():

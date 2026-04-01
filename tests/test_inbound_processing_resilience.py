@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
 from app.db.models import ConversationMessage, MessageDirection, ProfileStyle, User, UserProfile
+from app.db.repositories.message_repo import create_message
+from app.domain.conversation_manager import ProcessResult
 from app.worker import tasks as worker_tasks
 
 
@@ -20,9 +22,10 @@ def test_inbound_task_persists_messages_when_processing_fails(tmp_path: Path, mo
     user = User(phone_number="+12488290272", name="Test", timezone="America/New_York")
     session.add(user)
     session.flush()
+    user_id = user.id
     session.add(
         UserProfile(
-            user_id=user.id,
+            user_id=user_id,
             style=ProfileStyle.casual_cool,
             planning_preferences={},
             bio="",
@@ -70,3 +73,79 @@ def test_inbound_task_persists_messages_when_processing_fails(tmp_path: Path, mo
 
     assert any(m.direction == MessageDirection.inbound and m.external_id == "SM_IN_TEST_1" for m in messages)
     assert any(m.direction == MessageDirection.outbound and "processing miss" in m.body for m in messages)
+
+
+def test_inbound_task_keeps_persisted_outbound_when_transport_send_fails(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "resilience_send.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, class_=Session)
+    Base.metadata.create_all(bind=engine)
+
+    session = TestingSessionLocal()
+    user = User(phone_number="+12488290272", name="Test", timezone="America/New_York")
+    session.add(user)
+    session.flush()
+    user_id = user.id
+    session.add(
+        UserProfile(
+            user_id=user_id,
+            style=ProfileStyle.casual_cool,
+            planning_preferences={},
+            bio="",
+        )
+    )
+    session.commit()
+    session.close()
+
+    monkeypatch.setattr(worker_tasks, "SessionLocal", TestingSessionLocal)
+
+    class _PersistingManager:
+        def process_inbound(self, session: Session, payload) -> ProcessResult:  # noqa: ANN001
+            inbound = create_message(
+                session,
+                user_id=user_id,
+                direction=MessageDirection.inbound,
+                body=payload.body,
+                external_id=payload.message_sid,
+                metadata_json={"from": payload.from_number, "to": payload.to_number},
+            )
+            create_message(
+                session,
+                user_id=user_id,
+                direction=MessageDirection.outbound,
+                body="draft reply from composer",
+                external_id=None,
+                metadata_json={"in_reply_to": payload.message_sid, "message_id": str(inbound.id)},
+            )
+            return ProcessResult(user_id=str(user_id), outgoing_messages=["draft reply from composer"], skipped_duplicate=False)
+
+    monkeypatch.setattr(worker_tasks, "ConversationManager", lambda: _PersistingManager())
+
+    class _FailingTransport:
+        def send_sms(self, to_number: str, body: str) -> str:
+            raise RuntimeError("twilio outage")
+
+    monkeypatch.setattr(worker_tasks, "TwilioTransport", lambda: _FailingTransport())
+
+    result = worker_tasks.process_inbound_sms_task(
+        {
+            "From": "+12488290272",
+            "To": "+17622516270",
+            "Body": "yo",
+            "MessageSid": "SM_IN_TEST_2",
+            "NumMedia": 0,
+            "media": [],
+        }
+    )
+
+    assert result["skipped_duplicate"] is False
+    assert result["outgoing_count"] == 0
+    assert result["send_failures"] == 1
+    assert "error" not in result
+
+    verify = TestingSessionLocal()
+    messages = verify.execute(select(ConversationMessage).order_by(ConversationMessage.created_at.asc())).scalars().all()
+    verify.close()
+
+    assert any(m.direction == MessageDirection.inbound and m.external_id == "SM_IN_TEST_2" for m in messages)
+    assert any(m.direction == MessageDirection.outbound and m.body == "draft reply from composer" for m in messages)

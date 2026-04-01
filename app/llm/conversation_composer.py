@@ -75,38 +75,35 @@ class ConversationComposer:
         if not messages:
             return None, False
 
-        for _ in range(2):
-            quality_errors = self._quality_errors(messages, brief)
-            if self.repetition_guard.is_too_similar(" ".join(messages), recent_assistant):
-                quality_errors.append("too similar to recent assistant phrasing; reword opener and sentence cadence")
-            if not quality_errors:
-                return messages, regenerated
+        quality_errors = self._quality_errors(messages, brief)
+        if self.repetition_guard.is_too_similar(" ".join(messages), recent_assistant):
+            quality_errors.append("too similar to recent assistant phrasing; reword opener and sentence cadence")
+        if not quality_errors:
+            return messages, regenerated
 
-            regenerated = True
-            strict_retry = self._generate_messages_structured(
+        regenerated = True
+        strict_retry = self._generate_messages_structured(
+            brief=brief,
+            avoid_phrases=avoid_phrases,
+            strict=True,
+            lightweight=False,
+            quality_errors=quality_errors,
+        )
+        if not strict_retry:
+            strict_retry = self._generate_messages(
                 brief=brief,
                 avoid_phrases=avoid_phrases,
                 strict=True,
                 lightweight=False,
                 quality_errors=quality_errors,
             )
-            if not strict_retry:
-                strict_retry = self._generate_messages(
-                    brief=brief,
-                    avoid_phrases=avoid_phrases,
-                    strict=True,
-                    lightweight=False,
-                    quality_errors=quality_errors,
-                )
-            if not strict_retry:
-                return None, regenerated
-            messages = strict_retry
-
-        if self._needs_repair(messages, brief):
+        if not strict_retry:
             return None, regenerated
-        if self.repetition_guard.is_too_similar(" ".join(messages), recent_assistant):
+        if self._needs_repair(strict_retry, brief):
             return None, regenerated
-        return messages, regenerated
+        if self.repetition_guard.is_too_similar(" ".join(strict_retry), recent_assistant):
+            return None, regenerated
+        return strict_retry, regenerated
 
     def _needs_repair(self, messages: list[str], brief: ReplyBrief) -> bool:
         combined = " ".join(messages)
@@ -138,7 +135,7 @@ class ConversationComposer:
         options = {
             "temperature": 0.58 if not strict else 0.42,
             "num_predict": 40 if lightweight else 52,
-            "num_ctx": 384 if lightweight else 640,
+            "num_ctx": 384 if lightweight else 512,
             "repeat_penalty": 1.15,
         }
         text = self.adapter.text_completion(
@@ -146,7 +143,7 @@ class ConversationComposer:
             user=payload,
             model=self._select_model(lightweight=lightweight),
             options=options,
-            request_timeout_seconds=14 if lightweight else 22,
+            request_timeout_seconds=10 if lightweight else 14,
         )
         return self._extract_messages_from_text(text)
 
@@ -167,8 +164,8 @@ class ConversationComposer:
         )
         options = {
             "temperature": 0.52 if not strict else 0.35,
-            "num_predict": 72 if lightweight else 110,
-            "num_ctx": 640 if lightweight else 900,
+            "num_predict": 56 if lightweight else 84,
+            "num_ctx": 512 if lightweight else 768,
             "repeat_penalty": 1.15,
         }
         result = self.adapter.json_completion(
@@ -176,7 +173,7 @@ class ConversationComposer:
             user=payload,
             model=self._select_model(lightweight=lightweight),
             options=options,
-            request_timeout_seconds=16 if lightweight else 24,
+            request_timeout_seconds=11 if lightweight else 16,
         )
         if not isinstance(result, dict):
             return None
@@ -323,7 +320,11 @@ class ConversationComposer:
     def _should_use_lightweight_compose(brief: ReplyBrief) -> bool:
         if brief.response_goal in {"open_conversation", "acknowledge_context"}:
             return True
-        if brief.response_goal == "answer_question" and len(brief.key_facts_to_include) <= 2:
+        if brief.response_goal in {"confirm_update", "react_to_progress"}:
+            return True
+        if brief.response_goal == "answer_question" and len(brief.key_facts_to_include) <= 3:
+            return True
+        if brief.is_short_checkin:
             return True
         return False
 
@@ -646,8 +647,10 @@ class ConversationComposer:
         user_norm = cls._normalize_text(brief.latest_user_message)
         first_norm = cls._normalize_text(first)
         is_first_echo = user_norm and first_norm and SequenceMatcher(a=first_norm, b=user_norm).ratio() >= 0.9
-        if is_first_echo and len(messages) > 1:
-            return messages[1:]
+        if is_first_echo:
+            if len(messages) > 1:
+                return messages[1:]
+            return []
         if brief.response_goal == "answer_question" and first.endswith("?") and len(messages) > 1:
             return messages[1:]
         return messages

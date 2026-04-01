@@ -34,16 +34,29 @@ def process_inbound_sms_task(payload_data: dict[str, Any]) -> dict[str, Any]:
             session.commit()
             return {"skipped_duplicate": True, "message_sid": payload.message_sid}
 
-        sent = 0
-        for chunk in result.outgoing_messages:
-            transport.send_sms(to_number=payload.from_number, body=chunk)
-            sent += 1
-
+        # Persist inbound/state/outbound draft rows before transport send attempts.
+        # This keeps admin/debug history durable even if Twilio sending fails.
         session.commit()
+
+        sent = 0
+        send_failures = 0
+        for chunk in result.outgoing_messages:
+            try:
+                transport.send_sms(to_number=payload.from_number, body=chunk)
+                sent += 1
+            except Exception as send_exc:  # pragma: no cover
+                send_failures += 1
+                logger.exception(
+                    "outbound sms send failed sid=%s to=%s error=%s",
+                    payload.message_sid,
+                    payload.from_number,
+                    send_exc,
+                )
         return {
             "skipped_duplicate": False,
             "message_sid": payload.message_sid,
             "outgoing_count": sent,
+            "send_failures": send_failures,
         }
     except SoftTimeLimitExceeded as exc:  # pragma: no cover
         session.rollback()

@@ -345,6 +345,14 @@ class IntentExtractor:
         lowered = text.lower().strip()
         if fallback.intent in {"context_signal", "timeline_query", "status_query"} and fallback.confidence >= 0.82:
             return True
+        if (
+            fallback.intent == "add_task"
+            and fallback.confidence >= 0.78
+            and fallback.task is not None
+            and not fallback.needs_clarification
+            and self._is_simple_single_task_message(lowered)
+        ):
+            return True
         if fallback.intent == "general_chat" and fallback.confidence >= 0.55 and self._is_simple_checkin(lowered):
             return True
         return False
@@ -374,6 +382,20 @@ class IntentExtractor:
             "cooking",
         }
         return bool(words) and all(word in checkin_words for word in words)
+
+    @staticmethod
+    def _is_simple_single_task_message(text: str) -> bool:
+        words = re.findall(r"[a-z0-9']+", text)
+        if not words:
+            return False
+        if len(words) > 24:
+            return False
+        if "?" in text:
+            return False
+        # Avoid short-circuiting multi-task chains like "and then ..."
+        if any(token in text for token in (" and then ", ";", " also ", " plus ")):
+            return False
+        return any(token in text for token in ("need to", "have to", "gotta", "must", "assignment", "submit", "finish", "send"))
 
     @staticmethod
     def _detect_bulk_action(text: str) -> str | None:

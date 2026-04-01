@@ -20,6 +20,7 @@ class OllamaAdapter:
         self._vision_model = settings.ollama_vision_model
         self._base_url = settings.ollama_base_url.rstrip("/")
         self._timeout_seconds = float(settings.ollama_timeout_seconds)
+        self._keep_alive = settings.ollama_keep_alive
         self._timeout = httpx.Timeout(
             connect=min(5.0, self._timeout_seconds),
             read=self._timeout_seconds,
@@ -48,6 +49,7 @@ class OllamaAdapter:
             "stream": False,
             "format": "json",
             "prompt": f"{system}\n\n{user}",
+            "keep_alive": self._keep_alive,
         }
         if options:
             payload_generate["options"] = options
@@ -75,6 +77,7 @@ class OllamaAdapter:
             "model": model or self._text_model,
             "stream": False,
             "prompt": f"{system}\n\n{user}",
+            "keep_alive": self._keep_alive,
         }
         if options:
             payload_generate["options"] = options
@@ -100,6 +103,7 @@ class OllamaAdapter:
             "model": self._vision_model,
             "stream": False,
             "format": "json",
+            "keep_alive": self._keep_alive,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_prompt, "images": [image_b64]},

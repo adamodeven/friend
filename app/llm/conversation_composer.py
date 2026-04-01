@@ -56,7 +56,7 @@ class ConversationComposer:
             system=self._system_prompt(),
             user=payload,
             options={"temperature": 0.6, "num_predict": 90},
-            request_timeout_seconds=25,
+            request_timeout_seconds=40,
         )
         return self._extract_messages_from_text(text)
 

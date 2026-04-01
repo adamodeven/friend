@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     ollama_text_model: str = "llama3.2:3b"
     ollama_vision_model: str = "llava:13b"
     ollama_timeout_seconds: int = 45
+    ollama_keep_alive: str = "30m"
 
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

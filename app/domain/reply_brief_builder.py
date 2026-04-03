@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.db.models import PlanningNote, ScheduleBlock
 from app.db.repositories.message_repo import list_recent_messages
 from app.db.repositories.task_repo import list_active_tasks, list_upcoming_deadlines
+from app.llm.style import get_style_profile
 from app.schemas.reply import ReplyBrief, StateOutcome
 
 
@@ -27,6 +28,8 @@ class ReplyBriefBuilder:
     ) -> ReplyBrief:
         now = datetime.now(tz=ZoneInfo(user.timezone))
         short_checkin = self._is_short_checkin_message(latest_user_message)
+        style_mode = user.profile.style.value if user.profile else self.settings.default_style
+        style_profile = get_style_profile(style_mode)
         recent = list_recent_messages(session, user.id, limit=16)
         recent_thread = [
             f"{'assistant' if msg.direction.value == 'outbound' else 'user'}: {msg.body[:220]}"
@@ -76,6 +79,7 @@ class ReplyBriefBuilder:
         max_chunks = 2
         if outcome.response_goal in {"timeline_summary", "answer_question", "replan_blocker"}:
             max_chunks = 3
+        max_chunks = min(max_chunks, style_profile.max_chunks)
 
         return ReplyBrief(
             response_goal=outcome.response_goal,
@@ -85,9 +89,9 @@ class ReplyBriefBuilder:
             should_ask_question=outcome.should_ask_question,
             question_if_needed=outcome.question_if_needed,
             emotional_tone=outcome.emotional_tone,
-            style_mode=user.profile.style.value if user.profile else self.settings.default_style,
+            style_mode=style_mode,
             max_chunks=max_chunks,
-            max_chunk_length=self.settings.max_sms_chars,
+            max_chunk_length=min(self.settings.max_sms_chars, style_profile.max_sms_chars),
             mention_deadline=outcome.mention_deadline,
             mention_dependency=outcome.mention_dependency,
             mention_progress=outcome.mention_progress,

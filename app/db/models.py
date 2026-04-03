@@ -80,6 +80,7 @@ class UserProfile(Base):
     style: Mapped[ProfileStyle] = mapped_column(Enum(ProfileStyle), default=ProfileStyle.casual_cool)
     bedtime: Mapped[time | None] = mapped_column(Time, nullable=True)
     wake_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    baseline_profile_json: Mapped[dict] = mapped_column(JSON, default=dict)
     planning_preferences: Mapped[dict] = mapped_column(JSON, default=dict)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -104,6 +105,8 @@ class ConversationMessage(Base):
     __table_args__ = (
         UniqueConstraint("channel", "direction", "external_id", name="uq_message_external_direction"),
     )
+
+    extracted_tasks: Mapped[list["Task"]] = relationship(back_populates="source_message")
 
 
 class Project(Base):
@@ -139,17 +142,39 @@ class Task(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), index=True)
     project_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("projects.id"), index=True, nullable=True)
+    source_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("conversation_messages.id"),
+        index=True,
+        nullable=True,
+    )
     parent_task_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("tasks.id"), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(255), index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus), default=TaskStatus.active, index=True)
     priority: Mapped[int] = mapped_column(Integer, default=2)
     estimated_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    next_step: Mapped[str | None] = mapped_column(Text, nullable=True)
     deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
     soft_deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
+    deadline_source_phrase: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    deadline_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    deadline_is_ambiguous: Mapped[bool] = mapped_column(Boolean, default=False)
+    deadline_granularity: Mapped[str] = mapped_column(String(30), default="unknown")
+    deadline_timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     start_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_progress_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    blocker_details_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    slip_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_slipped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_slip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reminder_escalation_level: Mapped[int] = mapped_column(Integer, default=0)
+    last_reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reminder_pause_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source: Mapped[str] = mapped_column(String(40), default="conversation")
     extraction_confidence: Mapped[float] = mapped_column(Float, default=0.0)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -158,18 +183,47 @@ class Task(Base):
 
     user: Mapped["User"] = relationship(back_populates="tasks")
     project: Mapped["Project | None"] = relationship(back_populates="tasks")
+    source_message: Mapped["ConversationMessage | None"] = relationship(back_populates="extracted_tasks")
     parent_task: Mapped["Task | None"] = relationship(remote_side=[id], backref="subtasks")
+    reminders: Mapped[list["Reminder"]] = relationship(back_populates="task")
+    predecessor_links: Mapped[list["TaskDependency"]] = relationship(
+        foreign_keys="TaskDependency.predecessor_task_id",
+        back_populates="predecessor_task",
+    )
+    successor_links: Mapped[list["TaskDependency"]] = relationship(
+        foreign_keys="TaskDependency.successor_task_id",
+        back_populates="successor_task",
+    )
 
 
 class TaskDependency(Base):
     __tablename__ = "task_dependencies"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "predecessor_task_id",
+            "successor_task_id",
+            "dependency_type",
+            name="uq_task_dependency_edge",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id"), index=True)
     predecessor_task_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tasks.id"), index=True)
     successor_task_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tasks.id"), index=True)
     dependency_type: Mapped[str] = mapped_column(String(30), default="finish_to_start")
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    predecessor_task: Mapped["Task"] = relationship(
+        foreign_keys=[predecessor_task_id],
+        back_populates="predecessor_links",
+    )
+    successor_task: Mapped["Task"] = relationship(
+        foreign_keys=[successor_task_id],
+        back_populates="successor_links",
+    )
 
 
 class Reminder(Base):
@@ -183,10 +237,14 @@ class Reminder(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[ReminderStatus] = mapped_column(Enum(ReminderStatus), default=ReminderStatus.pending, index=True)
     escalation_level: Mapped[int] = mapped_column(Integer, default=0)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    task: Mapped["Task | None"] = relationship(back_populates="reminders")
 
 
 class ScheduleBlock(Base):
@@ -271,7 +329,11 @@ class DeadlineEvent(Base):
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     is_hard: Mapped[bool] = mapped_column(Boolean, default=True)
     source: Mapped[str] = mapped_column(String(60), default="conversation")
+    source_phrase: Mapped[str | None] = mapped_column(String(255), nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=0.8)
+    is_ambiguous: Mapped[bool] = mapped_column(Boolean, default=False)
+    granularity: Mapped[str] = mapped_column(String(30), default="unknown")
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -288,4 +350,3 @@ class ProcessingJob(Base):
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-

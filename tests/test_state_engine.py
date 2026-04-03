@@ -5,7 +5,8 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
-from app.db.models import Reminder, ReminderStatus, ScheduleBlock, Task, TaskStatus, User
+from app.db.models import PlanningNote, Reminder, ReminderStatus, ScheduleBlock, Task, TaskDependency, TaskStatus, User
+from app.db.repositories.task_repo import create_task, create_task_dependency
 from app.domain.state_engine import StateEngine
 from app.schemas.intent import ExtractedTask, IntentResult
 
@@ -23,7 +24,52 @@ def test_add_task_creates_task_and_deadline_event(db_session):
 
     task = db_session.execute(select(Task).where(Task.title == "Finish CAD")).scalars().first()
     assert task is not None
+    assert task.next_step is not None
     assert outcome.response_goal == "acknowledge_new_task"
+
+
+def test_add_task_persists_multiple_tasks_subtasks_and_dependencies(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+
+    intent = IntentResult(
+        intent="add_task",
+        confidence=0.95,
+        tasks=[
+            ExtractedTask(
+                title="Send recruiter email",
+                blockers=["need to fix portfolio website first"],
+                subtasks=[ExtractedTask(title="Export work sample PDF", priority=4)],
+            ),
+            ExtractedTask(title="Finish CAD", priority=5),
+        ],
+    )
+
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="need to send recruiter email, export work sample pdf for it, and finish cad",
+    )
+    db_session.commit()
+
+    email_task = db_session.execute(select(Task).where(Task.title == "Send recruiter email")).scalars().one()
+    subtask = db_session.execute(select(Task).where(Task.title == "Export work sample PDF")).scalars().one()
+    finish_cad = db_session.execute(select(Task).where(Task.title == "Finish CAD")).scalars().one()
+    prerequisite = db_session.execute(select(Task).where(Task.title == "Fix portfolio website")).scalars().one()
+    dependencies = db_session.execute(
+        select(TaskDependency).where(TaskDependency.successor_task_id == email_task.id)
+    ).scalars().all()
+
+    assert finish_cad is not None
+    assert subtask.parent_task_id == email_task.id
+    assert email_task.status == TaskStatus.blocked
+    assert {dependency.predecessor_task_id for dependency in dependencies} == {subtask.id, prerequisite.id}
+    assert outcome.is_multi_task_turn is True
+    assert any("captured 2 tasks" in fact for fact in outcome.key_facts_to_include)
+    assert any("split out 1 subtasks" in fact for fact in outcome.key_facts_to_include)
+    assert any("linked" in fact for fact in outcome.key_facts_to_include)
 
 
 def test_context_signal_creates_schedule_block(db_session):
@@ -173,12 +219,16 @@ def test_timeline_query_tomorrow_morning_routes_to_specific_window(db_session):
     assert any("tomorrow morning" in fact.lower() for fact in outcome.key_facts_to_include)
 
 
-def test_update_task_with_blocker_without_task_match_routes_to_replan(db_session):
+def test_update_task_blocker_creates_prerequisite_and_dependency(db_session):
     user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    create_task(db_session, user_id=user.id, title="Send recruiter email", priority=4)
+    db_session.commit()
+
     engine = StateEngine()
     intent = IntentResult(
         intent="update_task",
-        confidence=0.8,
+        confidence=0.88,
         blockers=["need to fix website first"],
         task_updates={"status": "blocked"},
     )
@@ -186,8 +236,85 @@ def test_update_task_with_blocker_without_task_match_routes_to_replan(db_session
         db_session,
         user=user,
         intent=intent,
-        raw_text="i keep getting distracted because i need to fix the website first",
+        raw_text="send recruiter email is blocked because i need to fix website first",
     )
+    db_session.commit()
+
+    blocked_task = db_session.execute(select(Task).where(Task.title == "Send recruiter email")).scalars().one()
+    prerequisite = db_session.execute(select(Task).where(Task.title == "Fix website")).scalars().one()
+    dependency = db_session.execute(
+        select(TaskDependency).where(
+            TaskDependency.predecessor_task_id == prerequisite.id,
+            TaskDependency.successor_task_id == blocked_task.id,
+        )
+    ).scalars().first()
+
+    assert blocked_task.status == TaskStatus.blocked
+    assert dependency is not None
     assert outcome.response_goal == "replan_blocker"
-    assert outcome.should_ask_question is True
-    assert outcome.question_if_needed is not None
+    assert outcome.should_ask_question is False
+    assert "fix website" in (outcome.suggested_next_step or "").lower()
+
+
+def test_complete_task_unblocks_successor_and_surfaces_next_action(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    prerequisite = create_task(db_session, user_id=user.id, title="Export resume PDF", priority=4)
+    successor = create_task(
+        db_session,
+        user_id=user.id,
+        title="Send recruiter email",
+        priority=5,
+        blocked_reason="need resume pdf first",
+        blocked_at=datetime.now(tz=ZoneInfo(user.timezone)),
+    )
+    successor.status = TaskStatus.blocked
+    create_task_dependency(
+        db_session,
+        user_id=user.id,
+        predecessor_task_id=prerequisite.id,
+        successor_task_id=successor.id,
+    )
+    db_session.commit()
+
+    engine = StateEngine()
+    intent = IntentResult(intent="complete_task", confidence=0.92)
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="finished exporting the resume pdf",
+    )
+    db_session.commit()
+
+    refreshed_successor = db_session.execute(select(Task).where(Task.id == successor.id)).scalars().one()
+    assert refreshed_successor.status == TaskStatus.active
+    assert any("unblocked: Send recruiter email" == fact for fact in outcome.key_facts_to_include)
+    assert "send recruiter email" in (outcome.suggested_next_step or "").lower()
+
+
+def test_reflection_records_slip_reason_on_task_and_memory(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    create_task(db_session, user_id=user.id, title="Finish CAD", priority=5)
+    db_session.commit()
+
+    engine = StateEngine()
+    intent = IntentResult(intent="reflection", confidence=0.86)
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="missed finish cad because i got distracted by another assignment",
+    )
+    db_session.commit()
+
+    task = db_session.execute(select(Task).where(Task.title == "Finish CAD")).scalars().one()
+    notes = db_session.execute(select(PlanningNote).order_by(PlanningNote.created_at.asc())).scalars().all()
+
+    assert task.slip_count == 1
+    assert task.last_slip_reason == "missed finish cad because i got distracted by another assignment"
+    assert any(note.note_type == "slip_reason" and note.related_task_id == task.id for note in notes)
+    assert any(note.note_type == "behavior_pattern" for note in notes)
+    assert outcome.response_goal == "replan_blocker"
+    assert "finish cad" in (outcome.suggested_next_step or "").lower()

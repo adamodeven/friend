@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
-from app.db.models import JobStatus, MessageDirection, ProcessingJob
+from app.db.models import Attachment, JobStatus, MessageDirection, ProcessingJob, Task
 from app.db.repositories.message_repo import create_message, inbound_message_exists
 from app.db.repositories.user_repo import get_user_by_phone, get_or_create_primary_user
 from app.domain.reply_brief_builder import ReplyBriefBuilder
@@ -26,6 +26,16 @@ class ProcessResult:
     user_id: str
     outgoing_messages: list[str]
     skipped_duplicate: bool = False
+
+
+@dataclass
+class AttachmentEffects:
+    processed_count: int = 0
+    failed_count: int = 0
+    artifacts_without_task: int = 0
+    tasks: list[Task] = field(default_factory=list)
+    reminder_labels: list[str] = field(default_factory=list)
+    ambiguous_tasks: list[Task] = field(default_factory=list)
 
 
 class ConversationManager:
@@ -96,19 +106,18 @@ class ConversationManager:
             logger.info("state applied sid=%s elapsed=%.2fs", payload.message_sid, time.monotonic() - started)
 
             if attachments_created:
-                for att in attachments_created:
-                    self.attachment_service.download_attachment(att)
-                    artifact, task = self.attachment_service.process_assignment_image(
-                        session,
-                        attachment=att,
-                        timezone=user.timezone,
-                    )
-                    if artifact and task:
-                        due = task.deadline_at.astimezone(ZoneInfo(user.timezone)).strftime("%a %-m/%-d %-I:%M%p").lower() if task.deadline_at else "no deadline seen"
-                        state_outcome.response_goal = "ingestion_confirmation"
-                        state_outcome.key_facts_to_include.append(f"image ingestion captured task: {task.title}")
-                        state_outcome.key_facts_to_include.append(f"image-derived due context: {due}")
-                        state_outcome.mention_deadline = bool(task.deadline_at)
+                effects = self._ingest_attachments(
+                    session,
+                    attachments=attachments_created,
+                    user=user,
+                )
+                self._merge_attachment_effects(
+                    session,
+                    raw_text=payload.body,
+                    user=user,
+                    state_outcome=state_outcome,
+                    effects=effects,
+                )
 
             brief = self.brief_builder.build(
                 session,
@@ -151,3 +160,140 @@ class ConversationManager:
             session.commit()
             logger.exception("inbound failed sid=%s elapsed=%.2fs", payload.message_sid, time.monotonic() - started)
             raise
+
+    def _ingest_attachments(self, session: Session, *, attachments: list[Attachment], user) -> AttachmentEffects:
+        effects = AttachmentEffects()
+        for attachment in attachments:
+            try:
+                self.attachment_service.download_attachment(attachment)
+                artifact, task = self.attachment_service.process_assignment_image(
+                    session,
+                    attachment=attachment,
+                    timezone=user.timezone,
+                )
+                effects.processed_count += 1
+                if task is not None:
+                    if task.user is None:
+                        task.user = user
+                    reminder = self.state_engine.reminders.schedule_for_task(session, task)
+                    effects.tasks.append(task)
+                    if reminder is not None:
+                        label = reminder.scheduled_for.astimezone(ZoneInfo(user.timezone)).strftime("%-I:%M%p").lower()
+                        effects.reminder_labels.append(label)
+                    if task.deadline_source_phrase and task.deadline_at is None:
+                        effects.ambiguous_tasks.append(task)
+                elif artifact is not None and (artifact.title or artifact.raw_text or artifact.context):
+                    effects.artifacts_without_task += 1
+            except Exception as exc:  # pragma: no cover - production hardening
+                attachment.status = "failed"
+                attachment.analysis = {"error": str(exc)}
+                effects.failed_count += 1
+                logger.exception("attachment ingestion failed attachment_id=%s", attachment.id)
+        return effects
+
+    def _merge_attachment_effects(
+        self,
+        session: Session,
+        *,
+        raw_text: str,
+        user,
+        state_outcome,
+        effects: AttachmentEffects,
+    ) -> None:
+        if effects.failed_count:
+            noun = "issue" if effects.failed_count == 1 else "issues"
+            state_outcome.key_facts_to_include.append(
+                f"attachment processing hit {effects.failed_count} {noun}, but the text update still went through"
+            )
+
+        if not effects.tasks and not effects.artifacts_without_task:
+            return
+
+        if effects.tasks:
+            titles = [task.title for task in effects.tasks[:3]]
+            if len(effects.tasks) == 1:
+                task = effects.tasks[0]
+                due = self._format_due(task.deadline_at, user.timezone) or task.deadline_source_phrase or "no deadline seen"
+                state_outcome.key_facts_to_include.append(f"screenshot captured task: {task.title}")
+                state_outcome.key_facts_to_include.append(f"screenshot due context: {due}")
+                if effects.reminder_labels:
+                    state_outcome.key_facts_to_include.append(f"check-in scheduled around {effects.reminder_labels[0]}")
+            else:
+                state_outcome.key_facts_to_include.append(f"screenshot captured {len(effects.tasks)} tasks")
+                state_outcome.key_facts_to_include.append("from image: " + ", ".join(titles))
+
+            if any(task.deadline_at or task.deadline_source_phrase for task in effects.tasks):
+                state_outcome.mention_deadline = True
+
+            if state_outcome.response_goal in {"open_conversation", "answer_question", "acknowledge_context"}:
+                state_outcome.response_goal = "ingestion_confirmation"
+                state_outcome.emotional_tone = "direct"
+                state_outcome.should_push_for_action = True
+
+            if state_outcome.response_goal == "timeline_summary":
+                summary = self._timeline_summary_for_text(
+                    session,
+                    user_id=user.id,
+                    timezone=user.timezone,
+                    raw_text=raw_text,
+                )
+                state_outcome.key_facts_to_include = [summary] + [
+                    fact for fact in state_outcome.key_facts_to_include if not self._looks_like_timeline_summary(fact)
+                ]
+
+            recommended = self.state_engine.timeline.recommend_next_task(session, user.id, user.timezone)
+            if recommended is not None:
+                state_outcome.suggested_next_step = self.state_engine._next_step_for_task(recommended)
+                state_outcome.should_push_for_action = True
+
+            if effects.ambiguous_tasks and not state_outcome.should_ask_question:
+                task = effects.ambiguous_tasks[0]
+                state_outcome.should_ask_question = True
+                state_outcome.question_if_needed = self.state_engine._time_clarification_question(
+                    task_title=task.title,
+                    time_reference=task.deadline_source_phrase or "that screenshot due time",
+                )
+        elif effects.artifacts_without_task:
+            if state_outcome.response_goal in {"open_conversation", "answer_question", "acknowledge_context"}:
+                state_outcome.response_goal = "ingestion_confirmation"
+                state_outcome.emotional_tone = "direct"
+            state_outcome.key_facts_to_include.append("screenshot saved, but the concrete task pull was low-confidence")
+            if not state_outcome.should_ask_question:
+                state_outcome.should_ask_question = True
+                state_outcome.question_if_needed = "what should i pull out from that screenshot?"
+
+    def _timeline_summary_for_text(self, session: Session, *, user_id, timezone: str, raw_text: str) -> str:
+        lowered = raw_text.lower()
+        if "weekend" in lowered:
+            return self.state_engine.timeline.build_weekend_view(session, user_id, timezone)
+        if "tomorrow morning" in lowered:
+            return self.state_engine.timeline.build_tomorrow_morning_view(session, user_id, timezone)
+        if "tonight" in lowered:
+            return self.state_engine.timeline.build_tonight_view(session, user_id, timezone)
+        if "next hour" in lowered:
+            return self.state_engine.timeline.next_hour_recommendation(session, user_id, timezone)
+        if "week" in lowered:
+            return self.state_engine.timeline.build_week_view(session, user_id, timezone)
+        return self.state_engine.timeline.build_today_view(session, user_id, timezone)
+
+    @staticmethod
+    def _looks_like_timeline_summary(value: str) -> bool:
+        lowered = value.lower()
+        return any(
+            token in lowered
+            for token in (
+                "today plan",
+                "tonight plan",
+                "tomorrow morning plan",
+                "this week plan",
+                "weekend plan",
+                "next hour move",
+            )
+        )
+
+    @staticmethod
+    def _format_due(value: datetime | None, timezone_name: str) -> str | None:
+        if value is None:
+            return None
+        due = value if value.tzinfo else value.replace(tzinfo=ZoneInfo(timezone_name))
+        return due.astimezone(ZoneInfo(timezone_name)).strftime("%a %-m/%-d %-I:%M%p").lower()

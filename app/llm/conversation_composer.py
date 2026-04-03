@@ -8,6 +8,7 @@ from app.core.config import get_settings
 from app.llm.client import OllamaAdapter
 from app.llm.message_chunker import MessageChunker
 from app.llm.repetition_guard import RepetitionGuard
+from app.llm.style import get_style_profile
 from app.schemas.reply import ComposedReply, ReplyBrief
 
 
@@ -35,10 +36,12 @@ class ConversationComposer:
         recent_assistant = [line.split(":", 1)[1].strip() for line in brief.recent_thread if line.startswith("assistant:")]
         messages, regenerated = self._compose_with_llm(brief, recent_assistant)
         if messages:
+            style_profile = get_style_profile(brief.style_mode)
             normalized = self.chunker.normalize_messages(
                 messages,
                 max_chunk_length=brief.max_chunk_length,
                 max_chunks=brief.max_chunks,
+                soft_chunk_length=style_profile.soft_chunk_chars,
             )
             normalized = self._postprocess_messages(normalized, brief)
             normalized = self._merge_tiny_lead_bubble(normalized, brief)
@@ -112,6 +115,7 @@ class ConversationComposer:
             or self._looks_low_quality(combined, brief.latest_user_message)
             or self._has_parrot_bubble(messages, brief.latest_user_message)
             or self._has_nonsequitur_for_short_checkin(messages, brief)
+            or self._is_overlong_for_goal(messages, brief)
             or self._goal_alignment_needs_repair(messages, brief)
             or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
             or self._answer_quality_needs_repair(messages, brief)
@@ -200,6 +204,9 @@ class ConversationComposer:
             "You write outbound SMS replies for a personal execution manager. "
             "Sound like a real person texting: casual, modern, sharp, socially fluent, concise. "
             "Never robotic, corporate, therapist-y, or generic productivity-bot language. "
+            "Most replies should be one short bubble. Use a second or third only when it clearly helps. "
+            "When the user is vague, overwhelmed, or slipping, narrow it to one concrete next move. "
+            "Urgency should sound calm and real, never corny, fake inspirational, or hypey. "
             "If user asks what you do or whether replies are canned/live, answer directly in plain language first. "
             "If latest user message is a short greeting/check-in, keep it present-tense and lightweight. "
             "Do not drag in old thread drama unless the user asked about it in this message. "
@@ -226,6 +233,9 @@ class ConversationComposer:
             "Output valid JSON only with this exact schema: {\"messages\": [\"bubble 1\", \"bubble 2\"]}. "
             "messages must contain 1 to 3 short text bubbles, each natural and human. "
             "No markdown, no numbering, no bullet points, no labels, no em dash. "
+            "Default to one short bubble unless extra separation clearly improves clarity. "
+            "If the user is vague or overloaded, reduce cognitive load by choosing one next move. "
+            "Urgency should feel clean and real, never corny or fake inspirational. "
             "Answer the latest user message directly and keep context continuity. "
             "If asked whether responses are live/canned, answer that directly in the first bubble. "
             f"{strict_rules}"
@@ -239,6 +249,7 @@ class ConversationComposer:
         lightweight: bool,
         quality_errors: list[str],
     ) -> str:
+        style_profile = get_style_profile(brief.style_mode)
         recent_thread = brief.recent_thread[-(2 if lightweight else 5) :] or ["(no prior thread)"]
         key_facts = brief.key_facts_to_include[: (2 if lightweight else 4)] or ["(none)"]
         tasks = (brief.active_task_context[:1] if lightweight else brief.active_task_context[:3]) or ["(none)"]
@@ -247,10 +258,14 @@ class ConversationComposer:
         notes = (brief.memory_notes[:1] if lightweight else brief.memory_notes[:2]) or ["(none)"]
         avoid = avoid_phrases[:3] or ["(none)"]
         errors = quality_errors[:5] or ["(none)"]
+        avoid_topics = brief.avoid_topics[:2] or ["(none)"]
+        style_rules = list(style_profile.guardrails[: (2 if lightweight else 4)]) or ["(none)"]
         question = brief.question_if_needed or "(none)"
         next_step = brief.suggested_next_step or "(none)"
         short_checkin = "yes" if brief.is_short_checkin else "no"
         style_hint = self._style_hint(brief.style_mode)
+        push_for_action = "yes" if brief.should_push_for_action else "no"
+        ask_question = "yes" if brief.should_ask_question else "no"
 
         def _lines(items: list[str]) -> str:
             return "\n".join(f"- {item}" for item in items)
@@ -264,6 +279,8 @@ class ConversationComposer:
                 f"- tone hint: {style_hint}\n"
                 f"- urgency: {brief.urgency_level}\n"
                 f"- reason: {brief.operational_reason or '(none)'}\n"
+                f"- push to one next move: {push_for_action}\n"
+                f"- ask brief follow-up only if needed: {ask_question}\n"
                 f"- short checkin: {short_checkin}\n"
                 f"- facts: {'; '.join(key_facts)}\n"
                 f"- next step: {next_step}\n"
@@ -273,6 +290,8 @@ class ConversationComposer:
                 f"- deadlines: {'; '.join(deadlines)}\n"
                 f"- state flags: {'; '.join(flags)}\n"
                 f"- memory notes: {'; '.join(notes)}\n"
+                f"- style rules: {'; '.join(style_rules)}\n"
+                f"- avoid topics: {'; '.join(avoid_topics)}\n"
                 f"- avoid repeated openers: {'; '.join(avoid)}\n"
                 f"- avoid these quality issues: {'; '.join(errors)}\n"
                 f"- max chunks: {brief.max_chunks}\n"
@@ -287,6 +306,8 @@ class ConversationComposer:
             f"TONE MODE: {brief.style_mode}\n"
             f"STYLE HINT: {style_hint}\n"
             f"REASON FOR REPLY: {brief.operational_reason or '(none)'}\n\n"
+            f"SHOULD PUSH TO ONE NEXT MOVE: {push_for_action}\n"
+            f"SHOULD ASK A BRIEF FOLLOW-UP ONLY IF NEEDED: {ask_question}\n\n"
             f"SHORT CHECKIN: {short_checkin}\n\n"
             f"KEY FACTS TO INCLUDE:\n{_lines(key_facts)}\n\n"
             f"SUGGESTED NEXT STEP:\n{next_step}\n\n"
@@ -296,12 +317,17 @@ class ConversationComposer:
             f"CURRENT USER FLAGS:\n{_lines(flags)}\n\n"
             f"MEMORY NOTES:\n{_lines(notes)}\n\n"
             f"RECENT THREAD:\n{_lines(recent_thread)}\n\n"
+            f"STYLE RULES:\n{_lines(style_rules)}\n\n"
+            f"AVOID TOPICS:\n{_lines(avoid_topics)}\n\n"
             f"AVOID REPEATING THESE OPENERS:\n{_lines(avoid)}\n\n"
             f"QUALITY ISSUES TO AVOID ON THIS ATTEMPT:\n{_lines(errors)}\n\n"
             f"OUTPUT CONSTRAINTS:\n"
             f"- max_chunks={brief.max_chunks}\n"
             f"- max_chunk_length={brief.max_chunk_length}\n"
             "- answer the latest user message directly\n"
+            "- keep it short by default\n"
+            "- if you push for action, narrow to one next move\n"
+            "- if you ask a follow-up, keep it brief and only ask one\n"
             "- if this is an answer_question goal, first bubble must be a direct answer statement\n"
             "- keep it human and text-like\n"
             "- never expose internal system labels\n"
@@ -310,11 +336,9 @@ class ConversationComposer:
 
     @staticmethod
     def _style_hint(style_mode: str) -> str:
-        if style_mode == "direct":
-            return "very concise, low slang, clean and decisive"
-        if style_mode == "more_serious":
-            return "focused and grounded, minimal playfulness, clear urgency"
-        return "casual_cool: short, socially fluent, modern texting cadence, light natural slang only when fitting"
+        profile = get_style_profile(style_mode)
+        rules = "; ".join(profile.guardrails[:3])
+        return f"{profile.system_hint} {rules}"
 
     @staticmethod
     def _should_use_lightweight_compose(brief: ReplyBrief) -> bool:
@@ -386,6 +410,7 @@ class ConversationComposer:
             base,
             max_chunk_length=brief.max_chunk_length,
             max_chunks=min(brief.max_chunks, 2),
+            soft_chunk_length=get_style_profile(brief.style_mode).soft_chunk_chars,
         )
 
     def _first_safe_fact(self, brief: ReplyBrief) -> str | None:
@@ -457,6 +482,7 @@ class ConversationComposer:
             or self._has_scaffolding_preface(messages)
             or self._has_parrot_bubble(messages, brief.latest_user_message)
             or self._has_nonsequitur_for_short_checkin(messages, brief)
+            or self._is_overlong_for_goal(messages, brief)
             or self._goal_alignment_needs_repair(messages, brief)
             or self._first_bubble_asks_question_when_direct_answer_needed(messages, brief)
             or self._answer_quality_needs_repair(messages, brief)
@@ -475,6 +501,8 @@ class ConversationComposer:
             errors.append("parrots user wording too closely")
         if self._has_nonsequitur_for_short_checkin(messages, brief):
             errors.append("short check-in response drifts off-topic")
+        if self._is_overlong_for_goal(messages, brief):
+            errors.append("reply is too long or too many bubbles for this goal")
         if self._goal_alignment_needs_repair(messages, brief):
             errors.append("response does not match the reply goal")
         if self._first_bubble_asks_question_when_direct_answer_needed(messages, brief):
@@ -797,6 +825,31 @@ class ConversationComposer:
             return False
         return cls._is_scaffolding_preface(messages[0])
 
+    @staticmethod
+    def _is_overlong_for_goal(messages: list[str], brief: ReplyBrief) -> bool:
+        if not messages:
+            return False
+        total_words = len(" ".join(messages).split())
+        bubble_count = len(messages)
+        max_words = 40
+        if brief.is_short_checkin:
+            max_words = 18
+        elif brief.response_goal in {"open_conversation", "acknowledge_context", "confirm_update", "react_to_progress"}:
+            max_words = 32
+        elif brief.response_goal in {"acknowledge_new_task", "replan_blocker", "followup_on_slip", "ingestion_confirmation"}:
+            max_words = 40
+        elif brief.response_goal == "answer_question":
+            max_words = 38
+        elif brief.response_goal == "timeline_summary":
+            max_words = 55
+        if total_words > max_words:
+            return True
+        if brief.response_goal not in {"timeline_summary", "answer_question"} and bubble_count > 2:
+            return True
+        if brief.is_short_checkin and bubble_count > 1 and any(len(message.split()) > 8 for message in messages):
+            return True
+        return False
+
     @classmethod
     def _goal_alignment_needs_repair(cls, messages: list[str], brief: ReplyBrief) -> bool:
         if not messages:
@@ -840,6 +893,8 @@ class ConversationComposer:
         if brief.response_goal == "timeline_summary":
             if not any(marker in combined for marker in ("today", "tonight", "tomorrow", "week", "due")):
                 return True
+            if combined.count(":") > 2:
+                return True
 
         if brief.response_goal == "open_conversation":
             if "status active" in combined:
@@ -855,6 +910,18 @@ class ConversationComposer:
             if "what i do" in combined and not any(token in lowered_user for token in ["what do", "what can", "are you", "do you"]):
                 return True
             if "i'm here to help" in combined or "under control" in combined:
+                return True
+
+        if brief.should_push_for_action and brief.suggested_next_step:
+            normalized_step = set(cls._normalize_text(brief.suggested_next_step).split())
+            normalized_reply = set(cls._normalize_text(combined).split())
+            shared_step_words = len(normalized_step.intersection(normalized_reply))
+            action_markers = ("next move", "first", "start", "do ", "take ", "send ", "finish ", "knock out", "try ")
+            if shared_step_words < 2 and not any(marker in combined for marker in action_markers):
+                return True
+
+        if brief.should_ask_question and brief.question_if_needed:
+            if combined.count("?") > 1:
                 return True
 
         return False

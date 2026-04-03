@@ -12,6 +12,7 @@ Keys:
 - blockers: array of strings
 - summary: short summary
 - task: optional object
+- tasks: optional array of task objects in message order when more than one task is present
   - title
   - description
   - project
@@ -21,7 +22,8 @@ Keys:
   - next_step
 
 Rules:
-- infer deadlines from phrases like tonight, tomorrow morning, by EOD, after class, this weekend
-- if time is ambiguous, keep confidence lower and ask one short follow-up only if needed
+- split multi-task SMS like "finish cad tonight and submit app tomorrow morning" into separate tasks
+- infer deadlines from phrases like tonight, tomorrow morning, by EOD, after class, later, this weekend, before studio
+- if time is ambiguous, keep confidence lower and ask one short follow-up only when the ambiguity would materially change planning or reminders
+- preserve the user's phrasing in deadline_text and keep titles free of time words
 - keep extraction pragmatic for execution tracking
-

@@ -23,6 +23,18 @@ UrgencyLevel = Literal["low", "medium", "high", "critical"]
 EmotionalTone = Literal["casual", "neutral", "direct", "supportive", "urgent", "calm"]
 
 
+class ReplyTaskContext(BaseModel):
+    title: str
+    status: str = "active"
+    deadline_at: datetime | None = None
+    deadline_text: str | None = None
+    next_step: str | None = None
+    blocker: str | None = None
+    reminder_escalation_level: int = 0
+    slip_count: int = 0
+    is_subtask: bool = False
+
+
 class StateOutcome(BaseModel):
     response_goal: ReplyGoal
     key_facts_to_include: list[str] = Field(default_factory=list)
@@ -36,6 +48,8 @@ class StateOutcome(BaseModel):
     mention_progress: bool = False
     suggested_next_step: str | None = None
     avoid_topics: list[str] = Field(default_factory=list)
+    task_contexts: list[ReplyTaskContext] = Field(default_factory=list)
+    is_multi_task_turn: bool = False
     operational_reason: str | None = None
 
 
@@ -55,6 +69,8 @@ class ReplyBrief(BaseModel):
     mention_progress: bool = False
     suggested_next_step: str | None = None
     avoid_topics: list[str] = Field(default_factory=list)
+    task_contexts: list[ReplyTaskContext] = Field(default_factory=list)
+    is_multi_task_turn: bool = False
     thread_context_summary: str = ""
     active_task_context: list[str] = Field(default_factory=list)
     deadline_context: list[str] = Field(default_factory=list)

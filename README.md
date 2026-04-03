@@ -7,14 +7,17 @@ Core stack:
 - PostgreSQL source of truth
 - Redis + Celery worker/beat for background reminders
 - Twilio SMS/MMS transport
-- Ollama (local) for intent extraction, conversational style, and image understanding
+- OpenAI or Ollama for intent extraction, conversational style, and image understanding
 - Deterministic scheduling/state transitions in domain services
 
 ## 1) What This Repo Includes
 
 - Natural language inbound parsing (`need to`, `due`, `in class rn`, `what's due this week`, etc.)
+- Multiple-task extraction from a single text and lightweight next-step generation
+- Dependency/blocker capture (`need to fix portfolio website first`) with prerequisite task linking
+- Brief follow-ups only when timing or blocker ambiguity would materially change planning
 - Durable task/project/reminder state in Postgres
-- MMS ingestion pipeline for assignment screenshots
+- MMS ingestion pipeline for assignment screenshots with extracted artifacts plus task creation/update when possible
 - Deterministic reminder scheduler (outside LLM)
 - Adaptive context handling (class/driving/dinner/all-nighter)
 - Message style layer (`casual_cool`, `direct`, `more_serious`)
@@ -23,6 +26,7 @@ Core stack:
 - Alembic migrations
 - Docker + Docker Compose suitable for Portainer
 - Tests for core state and reminder behavior
+- Conversation stress tests covering mixed turns, slips, blocker replans, timeline queries, and screenshot-derived tasks
 
 ## 2) Repository Structure
 
@@ -109,6 +113,10 @@ docker compose up --build
 
 Note:
 - API host binding uses `APP_PORT` from `.env` (default `8000`).
+- Preflight your stack file before deploying with:
+```bash
+docker compose config
+```
 
 If you change model names later and want to pull again:
 ```bash
@@ -225,6 +233,12 @@ bash scripts/simulate_twilio_webhook.sh "yo I need to finish the CAD for the enc
 APP_PORT=8045 ROUNDS=120 bash scripts/stress_simulate_twilio.sh
 ```
 
+Screenshot notes:
+- MMS attachments are stored under `ATTACHMENTS_DIR` / `attachments_dir` after download.
+- Screenshot ingestion creates an extracted artifact even when task confidence is low.
+- When the screenshot clearly maps to an existing active task, the task is updated instead of blindly duplicated.
+- Attachment failures are isolated so the text part of the turn still processes and replies.
+
 ### Via admin simulation endpoint
 ```bash
 curl -X POST http://localhost:8000/api/messages/simulate \
@@ -240,7 +254,15 @@ curl -X POST http://localhost:8000/api/messages/simulate \
 
 If you changed `APP_PORT`, replace `8000` in the URL above with your configured port.
 
-## 8) Admin/Debug Surface
+## 8) Test The Conversation Flow
+
+Relevant end-to-end conversation hardening tests:
+
+```bash
+pytest -q tests/test_conversation_manager.py tests/test_stress_conversation_behaviors.py
+```
+
+## 9) Admin/Debug Surface
 
 Protected by `X-Admin-Token`.
 
@@ -251,7 +273,7 @@ Protected by `X-Admin-Token`.
 - `GET /api/admin/notes/recent`
 - `POST /api/admin/reminders/run` (forces reminder schedule + send pass)
 
-## 9) CLI Commands
+## 10) CLI Commands
 
 ```bash
 friend-admin active-tasks
@@ -260,7 +282,7 @@ friend-admin messages --limit 20
 friend-admin run-reminders
 ```
 
-## 10) Architecture Notes
+## 11) Architecture Notes
 
 ### Deterministic source of truth
 - Task/project/reminder/deadline state lives in Postgres.
@@ -298,7 +320,7 @@ friend-admin run-reminders
 - Domain logic isolated in `app/domain`
 - Storage isolated in `app/db`
 
-## 11) Environment Variables You Must Fill
+## 12) Environment Variables You Must Fill
 
 Required for production:
 - `DATABASE_URL`
@@ -353,7 +375,7 @@ Recommended:
 - `DEFAULT_STYLE`
 - `ATTACHMENTS_DIR`
 
-## 12) Tests
+## 13) Tests
 
 ```bash
 pytest -q
@@ -365,12 +387,15 @@ pytest -q tests/test_stress_conversation_behaviors.py tests/test_reply_composer.
 ```
 
 Current suite validates:
-- fallback intent parsing
-- deterministic task creation + context block updates
-- reminder scheduling + dedup spacing behavior
-- inbound webhook idempotency behavior
+- natural-language task add/update across single-task and multi-task turns
+- deadline inference, ambiguity handling, and timeline-specific time phrases
+- deterministic task creation, dependencies, subtasks, blocker-aware replanning, and profile memory capture
+- reminder scheduling, escalation, dedup spacing, and context-aware reminder deferral
+- inbound webhook idempotency plus end-to-end conversation/state progression
+- attachment ingestion and screenshot-derived artifact/task capture
+- Alembic upgrade paths and model-to-schema parity for the contract-critical tables
 
-## 13) Quick Troubleshooting
+## 14) Quick Troubleshooting
 
 - Incoming shows in Twilio but no outbound:
   - confirm `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` are set in `.env`
@@ -378,7 +403,7 @@ Current suite validates:
   - if you intentionally disabled sends for test mode, check `TWILIO_OUTBOUND_ENABLED` (set to `true` to re-enable live SMS)
   - check API logs: `docker logs -f friend-api`
 
-## 14) Known MVP Limitations / Next Upgrades
+## 15) Known MVP Limitations / Next Upgrades
 
 - Single-user mode only (by design for now)
 - Attachment OCR uses model vision parsing directly; no dedicated OCR fallback yet

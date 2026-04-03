@@ -4,7 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from app.db.models import ConversationMessage, MessageDirection, Task, TaskStatus, User
+from app.db.models import ConversationMessage, MessageDirection, ProfileStyle, Task, TaskStatus, User
 from app.domain.reply_brief_builder import ReplyBriefBuilder
 from app.schemas.reply import StateOutcome
 
@@ -135,3 +135,27 @@ def test_acknowledge_new_task_brief_omits_unrelated_active_context(db_session):
     )
     assert brief.active_task_context == []
     assert brief.deadline_context == []
+
+
+def test_reply_brief_uses_style_profile_chunk_limits(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    assert user.profile is not None
+    user.profile.style = ProfileStyle.direct
+    db_session.commit()
+
+    builder = ReplyBriefBuilder()
+    outcome = StateOutcome(
+        response_goal="timeline_summary",
+        key_facts_to_include=["tonight: finish CAD, then submit the scout job application"],
+    )
+    brief = builder.build(
+        db_session,
+        user=user,
+        latest_user_message="what do i need to get done tonight",
+        outcome=outcome,
+    )
+
+    assert brief.style_mode == "direct"
+    assert brief.max_chunk_length == 260
+    assert brief.max_chunks == 2

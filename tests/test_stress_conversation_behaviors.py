@@ -4,11 +4,12 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from app.db.models import ConversationMessage, MessageDirection, ScheduleBlock, Task, TaskStatus, User
+from app.db.models import Attachment, ConversationMessage, ExtractedArtifact, MessageDirection, PlanningNote, ScheduleBlock, Task, TaskDependency, TaskStatus, User
+from app.db.repositories.task_repo import create_task
 from app.domain.conversation_manager import ConversationManager
 from app.llm.conversation_composer import ConversationComposer
 from app.schemas.reply import ComposedReply, ReplyBrief
-from app.schemas.transport import InboundSmsPayload
+from app.schemas.transport import InboundMedia, InboundSmsPayload
 
 
 class _StressAdapter:
@@ -76,43 +77,121 @@ class _DeterministicComposer:
         return ComposedReply(messages=[f"ok. {brief.response_goal}"], used_fallback=False)
 
 
-def _payload(from_number: str, body: str, sid: str) -> InboundSmsPayload:
+class _StressAttachmentService:
+    def save_attachment(self, session, *, user_id, message_id, media_url: str, content_type: str | None):  # noqa: ANN001
+        attachment = Attachment(
+            user_id=user_id,
+            message_id=message_id,
+            media_url=media_url,
+            media_content_type=content_type,
+            status="received",
+        )
+        session.add(attachment)
+        session.flush()
+        return attachment
+
+    def download_attachment(self, attachment: Attachment):  # noqa: ANN201
+        attachment.status = "downloaded"
+        return None
+
+    def process_assignment_image(self, session, *, attachment: Attachment, timezone: str):  # noqa: ANN001,ARG002
+        artifact = ExtractedArtifact(
+            user_id=attachment.user_id,
+            source_attachment_id=attachment.id,
+            title="Prepare fabrication checklist",
+            context="screenshot from class portal",
+            raw_text="Prepare fabrication checklist due this weekend",
+            confidence=0.81,
+        )
+        session.add(artifact)
+        session.flush()
+        task = create_task(
+            session,
+            user_id=attachment.user_id,
+            title="Prepare fabrication checklist",
+            next_step="outline the checklist sections and gather missing measurements",
+            deadline_source_phrase="this weekend",
+            extraction_confidence=0.81,
+            metadata_json={"source_attachment_id": str(attachment.id)},
+        )
+        task.source = "attachment_ingestion"
+        artifact.created_task_id = task.id
+        attachment.status = "processed"
+        attachment.analysis = {"title": artifact.title, "due_text": "this weekend"}
+        session.flush()
+        return artifact, task
+
+
+def _payload(
+    from_number: str,
+    body: str,
+    sid: str,
+    *,
+    media: list[InboundMedia] | None = None,
+) -> InboundSmsPayload:
     return InboundSmsPayload(
         From=from_number,
         To="+15550002222",
         Body=body,
         MessageSid=sid,
-        NumMedia=0,
-        media=[],
+        NumMedia=len(media or []),
+        media=media or [],
     )
 
 
 def test_end_to_end_conversation_sequence_updates_state(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None
-    manager = ConversationManager(composer=_DeterministicComposer())
+    manager = ConversationManager(
+        composer=_DeterministicComposer(),
+        attachment_service=_StressAttachmentService(),
+    )
 
     sequence = [
-        ("SM_STRESS_001", "yo i need to finish the cad for the enclosure by tomorrow night"),
-        ("SM_STRESS_002", "and then tmr morning i need to submit my scout job application"),
-        ("SM_STRESS_003", "lowkey i keep getting distracted because i need to fix the website first"),
-        ("SM_STRESS_004", "what do i have due this week"),
-        ("SM_STRESS_005", "in class rn"),
-        ("SM_STRESS_006", "just finished the first draft"),
+        _payload(
+            user.phone_number,
+            "yo i need to finish the cad for the enclosure by tomorrow night and submit my scout job application tomorrow morning",
+            "SM_STRESS_001",
+        ),
+        _payload(
+            user.phone_number,
+            "the scout job application is blocked because i need to fix the portfolio website first",
+            "SM_STRESS_002",
+        ),
+        _payload(
+            user.phone_number,
+            "also pull this from the screenshot",
+            "SM_STRESS_003",
+            media=[InboundMedia(media_url="https://example.com/assignment.png", content_type="image/png")],
+        ),
+        _payload(user.phone_number, "in class rn", "SM_STRESS_004"),
+        _payload(user.phone_number, "what do i have due this week", "SM_STRESS_005"),
+        _payload(user.phone_number, "i'm behind on the cad for the enclosure because i got distracted again", "SM_STRESS_006"),
+        _payload(user.phone_number, "just finished fix the portfolio website", "SM_STRESS_007"),
     ]
 
-    for sid, body in sequence:
-        result = manager.process_inbound(db_session, _payload(user.phone_number, body, sid))
+    for payload in sequence:
+        result = manager.process_inbound(db_session, payload)
         assert result.skipped_duplicate is False
         assert result.outgoing_messages
         db_session.commit()
 
     tasks = db_session.execute(select(Task).where(Task.user_id == user.id)).scalars().all()
-    assert len(tasks) >= 2
+    assert len(tasks) >= 4
+    assert any(task.title == "Prepare fabrication checklist" for task in tasks)
+    assert any("cad for the enclosure" in task.title.lower() for task in tasks)
+    assert any("scout job application" in task.title.lower() for task in tasks)
+    assert any("portfolio website" in task.title.lower() for task in tasks)
     assert any(task.status in {TaskStatus.active, TaskStatus.blocked, TaskStatus.completed} for task in tasks)
+
+    dependency = db_session.execute(select(TaskDependency)).scalars().first()
+    assert dependency is not None
 
     blocks = db_session.execute(select(ScheduleBlock).where(ScheduleBlock.user_id == user.id)).scalars().all()
     assert any(block.block_type == "in_class" for block in blocks)
+
+    notes = db_session.execute(select(PlanningNote).where(PlanningNote.user_id == user.id)).scalars().all()
+    assert any(note.note_type == "slip_reason" for note in notes)
 
     outbound = (
         db_session.execute(

@@ -7,23 +7,55 @@ from dataclasses import dataclass
 class StyleProfile:
     name: str
     system_hint: str
+    max_sms_chars: int
+    soft_chunk_chars: int
+    max_chunks: int
+    guardrails: tuple[str, ...]
 
 
 STYLE_PROFILES: dict[str, StyleProfile] = {
     "casual_cool": StyleProfile(
         name="casual_cool",
         system_hint=(
-            "sound like a smart, socially fluent texting friend. concise, casual, natural slang only when it fits. "
-            "stay competent and focused. no cringe. no corporate tone."
+            "sound like a sharp, socially fluent texting accountability partner. concise, current, and competent. "
+            "lowercase is fine when it feels natural. slang stays light and earned."
+        ),
+        max_sms_chars=320,
+        soft_chunk_chars=150,
+        max_chunks=3,
+        guardrails=(
+            "keep replies short by default",
+            "sound human and current, not try-hard",
+            "push toward one concrete next move when the user is vague or overloaded",
+            "urgency should feel real, not hypey",
+            "no corny lines, therapy language, or corporate phrasing",
         ),
     ),
     "direct": StyleProfile(
         name="direct",
-        system_hint="be short, clear, decisive, and practical. little fluff.",
+        system_hint="be terse, decisive, and practical. say the useful thing fast.",
+        max_sms_chars=260,
+        soft_chunk_chars=120,
+        max_chunks=2,
+        guardrails=(
+            "default to one short text unless a second is necessary",
+            "low slang and minimal filler",
+            "lead with the decision or next action",
+            "stay firm without sounding robotic",
+        ),
     ),
     "more_serious": StyleProfile(
         name="more_serious",
-        system_hint="calm, serious, concise, execution-focused, still human.",
+        system_hint="be calm, grounded, concise, and execution-focused while still sounding like a real person.",
+        max_sms_chars=300,
+        soft_chunk_chars=145,
+        max_chunks=3,
+        guardrails=(
+            "keep a calm texting cadence",
+            "stay concise and low-fluff",
+            "sound steady under urgency",
+            "avoid dashboards, lectures, and fake warmth",
+        ),
     ),
 }
 
@@ -56,4 +88,3 @@ def chunk_sms(text: str, max_chars: int = 320) -> list[str]:
     if current:
         chunks.append(" ".join(current).strip())
     return chunks
-

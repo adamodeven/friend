@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import re
 from zoneinfo import ZoneInfo
@@ -8,12 +9,43 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.time_utils import parse_human_time, time_window_for_context
-from app.db.models import DeadlineEvent, PlanningNote, Project, Reminder, ReminderStatus, ScheduleBlock, Task, TaskStatus, UserProfile
-from app.db.repositories.task_repo import create_task, find_active_task_by_title, list_active_tasks, mark_task_complete
+from app.db.models import DeadlineEvent, PlanningNote, Project, Reminder, ReminderStatus, ScheduleBlock, Task, TaskDependency, TaskStatus, UserProfile
+from app.db.repositories.task_repo import (
+    create_task,
+    create_task_dependency,
+    find_active_task_by_title,
+    list_active_tasks,
+    mark_task_complete,
+    record_task_progress,
+    record_task_slip,
+    set_task_blocked,
+)
 from app.domain.reminder_engine import ReminderEngine
 from app.domain.timeline_service import TimelineService
-from app.schemas.intent import IntentResult
-from app.schemas.reply import StateOutcome
+from app.schemas.intent import ExtractedDependency, ExtractedTask, IntentResult
+from app.schemas.reply import ReplyTaskContext, StateOutcome
+
+
+@dataclass(slots=True)
+class CapturedTaskEntry:
+    extracted: ExtractedTask
+    task: Task
+    parent_task: Task | None = None
+
+
+@dataclass(slots=True)
+class CaptureBundle:
+    entries: list[CapturedTaskEntry] = field(default_factory=list)
+    root_tasks: list[Task] = field(default_factory=list)
+    dependency_count: int = 0
+    subtask_count: int = 0
+    reminder_count: int = 0
+    created_prerequisites: list[Task] = field(default_factory=list)
+    deadline_tasks: list[Task] = field(default_factory=list)
+    ambiguous_deadline_task: Task | None = None
+    ambiguous_time_reference: str | None = None
+    unresolved_blocker_task: Task | None = None
+    unresolved_blocker_text: str | None = None
 
 
 class StateEngine:
@@ -34,68 +66,83 @@ class StateEngine:
             operational_reason=f"intent={intent.intent}",
         )
 
-        if intent.intent == "add_task" and intent.task:
-            project_id = None
-            if intent.task.project:
-                project = self._get_or_create_project(session, user.id, intent.task.project)
-                project_id = project.id
-                outcome.key_facts_to_include.append(f"attached to project {project.title}")
-
-            task = create_task(
+        extracted_tasks = intent.tasks or ([intent.task] if intent.task else [])
+        if intent.intent == "add_task" and extracted_tasks:
+            bundle = self._capture_tasks(
                 session,
-                user_id=user.id,
-                title=intent.task.title,
-                description=intent.task.description,
-                project_id=project_id,
-                deadline_at=intent.task.deadline_at,
-                priority=intent.task.priority,
-                extraction_confidence=intent.task.confidence,
-                metadata_json={"source_text": raw_text, "next_step": intent.task.next_step},
+                user=user,
+                extracted_tasks=extracted_tasks,
+                raw_text=raw_text,
+                needs_time_clarification=intent.needs_clarification,
+                time_reference=intent.time_reference,
+                time_confidence=intent.time_confidence,
             )
             outcome.response_goal = "acknowledge_new_task"
-            outcome.key_facts_to_include.append(f"task captured: {task.title}")
-            outcome.mention_progress = True
-
-            if task.deadline_at:
-                deadline = DeadlineEvent(
-                    user_id=user.id,
-                    task_id=task.id,
-                    title=f"Deadline: {task.title}",
-                    due_at=task.deadline_at,
-                    source="message_parse",
-                    confidence=intent.time_confidence or intent.task.confidence,
-                )
-                session.add(deadline)
-                due_text = task.deadline_at.astimezone(ZoneInfo(user.timezone)).strftime("%a %-m/%-d %-I:%M%p").lower()
-                outcome.key_facts_to_include.append(f"due {due_text}")
-                outcome.mention_deadline = True
-                outcome.urgency_level = self._urgency_from_deadline(task.deadline_at, user.timezone)
-
-            reminder = self.reminders.schedule_for_task(session, task)
-            if reminder:
-                scheduled = reminder.scheduled_for.astimezone(ZoneInfo(user.timezone)).strftime("%-I:%M%p").lower()
-                outcome.key_facts_to_include.append(f"check-in scheduled around {scheduled}")
-
-            outcome.should_push_for_action = True
-            resolved_next_step = intent.task.next_step or self._default_next_step(task.title)
-            outcome.suggested_next_step = resolved_next_step
-            needs_time_clarification = bool(
-                intent.needs_clarification
-                or (intent.time_reference and (not task.deadline_at or intent.time_confidence < 0.6))
-            )
-            if needs_time_clarification:
-                outcome.should_ask_question = True
-                outcome.question_if_needed = intent.clarification_question or self._time_clarification_question(
-                    task_title=task.title,
-                    time_reference=intent.time_reference or intent.task.deadline_text or "that time",
-                )
-            elif self._should_offer_checkpoints(task_title=task.title, raw_text=raw_text, suggested_next_step=resolved_next_step):
-                outcome.question_if_needed = "want me to break that into 2 quick checkpoints?"
-                outcome.should_ask_question = True
-            else:
-                outcome.question_if_needed = None
-                outcome.should_ask_question = False
             outcome.emotional_tone = "direct"
+            outcome.mention_progress = True
+            outcome.mention_dependency = bundle.dependency_count > 0 or bundle.subtask_count > 0
+            outcome.is_multi_task_turn = len(bundle.root_tasks) > 1
+            outcome.task_contexts = [self._task_context(task) for task in bundle.root_tasks[:6]]
+            outcome.should_push_for_action = True
+            outcome.operational_reason = (
+                f"intent=add_task tasks={len(bundle.root_tasks)} deps={bundle.dependency_count} subtasks={bundle.subtask_count}"
+            )
+
+            if len(bundle.root_tasks) == 1:
+                task = bundle.root_tasks[0]
+                outcome.key_facts_to_include.append(f"task captured: {task.title}")
+            else:
+                outcome.key_facts_to_include.append(f"captured {len(bundle.root_tasks)} tasks from this message")
+                outcome.key_facts_to_include.append(
+                    "queued: " + ", ".join(task.title for task in bundle.root_tasks[:3])
+                )
+            if bundle.subtask_count:
+                outcome.key_facts_to_include.append(f"split out {bundle.subtask_count} subtasks")
+            if bundle.dependency_count:
+                outcome.key_facts_to_include.append(f"linked {bundle.dependency_count} prerequisite edges")
+            if bundle.created_prerequisites:
+                outcome.key_facts_to_include.append(f"added prerequisite: {bundle.created_prerequisites[0].title}")
+            if bundle.deadline_tasks:
+                earliest = min(
+                    bundle.deadline_tasks,
+                    key=lambda task: self._normalize_dt(task.deadline_at, user.timezone) or datetime.max.replace(tzinfo=ZoneInfo(user.timezone)),
+                )
+                due_text = self._format_due(earliest.deadline_at, user.timezone)
+                if due_text:
+                    outcome.key_facts_to_include.append(f"earliest due {due_text}")
+                outcome.mention_deadline = True
+                if earliest.deadline_at is not None:
+                    outcome.urgency_level = self._urgency_from_deadline(earliest.deadline_at, user.timezone)
+            if bundle.reminder_count and len(bundle.root_tasks) == 1:
+                task = bundle.root_tasks[0]
+                pending = self._next_pending_reminder_for_task(session, task.id)
+                if pending:
+                    scheduled = pending.scheduled_for.astimezone(ZoneInfo(user.timezone)).strftime("%-I:%M%p").lower()
+                    outcome.key_facts_to_include.append(f"check-in scheduled around {scheduled}")
+
+            recommended = self.timeline.recommend_next_task(session, user.id, user.timezone)
+            if recommended:
+                outcome.suggested_next_step = self._next_step_for_task(recommended)
+
+            if bundle.ambiguous_deadline_task and bundle.ambiguous_time_reference:
+                outcome.should_ask_question = True
+                outcome.question_if_needed = self._time_clarification_question(
+                    task_title=bundle.ambiguous_deadline_task.title,
+                    time_reference=bundle.ambiguous_time_reference,
+                )
+            elif bundle.unresolved_blocker_task and bundle.unresolved_blocker_text:
+                outcome.should_ask_question = True
+                outcome.question_if_needed = self._blocker_followup_question(bundle.unresolved_blocker_task.title)
+            elif len(bundle.root_tasks) == 1 and self._should_offer_checkpoints(
+                task_title=bundle.root_tasks[0].title,
+                raw_text=raw_text,
+                suggested_next_step=extracted_tasks[0].next_step,
+            ):
+                outcome.should_ask_question = True
+                outcome.question_if_needed = "want me to break that into 2 quick checkpoints?"
+            else:
+                outcome.should_ask_question = False
+                outcome.question_if_needed = None
 
         elif intent.intent == "complete_task":
             matched = self._match_task_from_text(session, user.id, raw_text)
@@ -104,11 +151,16 @@ class StateEngine:
             outcome.emotional_tone = "supportive"
             if matched:
                 mark_task_complete(matched)
+                unlocked = self._refresh_successors(matched)
+                session.flush()
                 outcome.key_facts_to_include.append(f"marked complete: {matched.title}")
-                next_task = self._next_task(session, user.id)
+                if unlocked:
+                    outcome.key_facts_to_include.append(f"unblocked: {unlocked[0].title}")
+                    outcome.mention_dependency = True
+                next_task = self.timeline.recommend_next_task(session, user.id, user.timezone)
                 if next_task:
                     outcome.key_facts_to_include.append(f"next likely focus: {next_task.title}")
-                    outcome.suggested_next_step = f"take a first pass on {next_task.title}"
+                    outcome.suggested_next_step = self._next_step_for_task(next_task)
                     outcome.should_push_for_action = True
             else:
                 outcome.key_facts_to_include.append("completion noted, but task match was uncertain")
@@ -120,24 +172,19 @@ class StateEngine:
             outcome.mention_deadline = True
             outcome.emotional_tone = "direct"
             lowered = raw_text.lower()
-            if "week" in lowered:
-                summary = self.timeline.build_week_view(session, user.id, user.timezone)
-                outcome.key_facts_to_include.append(summary)
-            elif "weekend" in lowered:
+            if "weekend" in lowered:
                 summary = self.timeline.build_weekend_view(session, user.id, user.timezone)
-                outcome.key_facts_to_include.append(summary)
             elif "tomorrow morning" in lowered:
                 summary = self.timeline.build_tomorrow_morning_view(session, user.id, user.timezone)
-                outcome.key_facts_to_include.append(summary)
             elif "tonight" in lowered:
                 summary = self.timeline.build_tonight_view(session, user.id, user.timezone)
-                outcome.key_facts_to_include.append(summary)
             elif "next hour" in lowered:
-                move = self.timeline.next_hour_recommendation(session, user.id, user.timezone)
-                outcome.key_facts_to_include.append(move)
+                summary = self.timeline.next_hour_recommendation(session, user.id, user.timezone)
+            elif "week" in lowered:
+                summary = self.timeline.build_week_view(session, user.id, user.timezone)
             else:
-                today = self.timeline.build_today_view(session, user.id, user.timezone)
-                outcome.key_facts_to_include.append(today)
+                summary = self.timeline.build_today_view(session, user.id, user.timezone)
+            outcome.key_facts_to_include.append(summary)
             outcome.should_push_for_action = True
 
         elif intent.intent == "context_signal":
@@ -160,19 +207,34 @@ class StateEngine:
             outcome.avoid_topics.append("hard-pressure push while unavailable")
 
         elif intent.intent == "reflection":
+            target = self._reflection_target(session, user.id, raw_text, user.timezone)
             note = PlanningNote(
                 user_id=user.id,
                 note_type="slip_reason",
                 content=raw_text,
-                weight=0.7,
+                related_task_id=target.id if target else None,
+                weight=0.75,
             )
             session.add(note)
             outcome.response_goal = "replan_blocker"
             outcome.emotional_tone = "supportive"
-            outcome.key_facts_to_include.append("blocker pattern captured in memory")
             outcome.should_push_for_action = True
-            outcome.should_ask_question = True
-            outcome.question_if_needed = "what's the smallest next move that would unstick this?"
+            if target:
+                record_task_slip(target, reason=raw_text, next_step=self._next_step_for_task(target))
+                self._refresh_task_block_state(target)
+                outcome.key_facts_to_include.append(f"slip noted for {target.title}")
+                outcome.task_contexts = [self._task_context(target)]
+                outcome.suggested_next_step = self._next_step_for_task(target)
+                if target.status == TaskStatus.blocked:
+                    outcome.mention_dependency = True
+                    outcome.should_ask_question = True
+                    outcome.question_if_needed = self._blocker_followup_question(target.title)
+                else:
+                    outcome.should_ask_question = False
+            else:
+                outcome.key_facts_to_include.append("blocker pattern captured in memory")
+                outcome.should_ask_question = True
+                outcome.question_if_needed = "what's the smallest next move that would unstick this?"
 
         elif intent.intent == "update_task":
             bulk_action = str(intent.task_updates.get("bulk_action", "")).strip().lower()
@@ -186,7 +248,7 @@ class StateEngine:
                     outcome.suggested_next_step = "drop the next task you want tracked"
                 outcome.should_ask_question = False
             else:
-                matched = self._match_task_from_text(session, user.id, raw_text)
+                matched = self._resolve_update_target(session, user.id, raw_text, intent.blockers)
                 outcome.response_goal = "confirm_update"
                 outcome.emotional_tone = "direct"
                 if matched:
@@ -194,27 +256,42 @@ class StateEngine:
                         parsed, conf = parse_human_time(intent.time_reference, timezone=user.timezone)
                         if parsed:
                             matched.deadline_at = parsed
+                            matched.deadline_source_phrase = intent.time_reference
+                            matched.deadline_confidence = max(matched.deadline_confidence, conf)
                             matched.extraction_confidence = max(matched.extraction_confidence, conf)
                             outcome.key_facts_to_include.append(
                                 f"deadline updated for {matched.title} -> {parsed.astimezone(ZoneInfo(user.timezone)).strftime('%a %-m/%-d %-I:%M%p').lower()}"
                             )
                             outcome.mention_deadline = True
-                    if intent.task_updates.get("status") == "blocked":
-                        matched.status = TaskStatus.blocked
-                        matched.blocked_reason = ", ".join(intent.blockers) if intent.blockers else raw_text
+                    if intent.task_updates.get("status") == "blocked" or intent.blockers:
+                        blocker_texts = intent.blockers or [raw_text]
+                        resolved = self._apply_blockers_to_task(
+                            session,
+                            user=user,
+                            task=matched,
+                            blocker_texts=blocker_texts,
+                            title_index={},
+                            bundle=None,
+                        )
+                        self._refresh_task_block_state(matched)
                         outcome.key_facts_to_include.append(f"task blocked: {matched.title}")
                         outcome.mention_dependency = True
                         outcome.response_goal = "replan_blocker"
-                        outcome.should_ask_question = True
-                        outcome.question_if_needed = "what has to happen first before this can move?"
+                        if resolved:
+                            outcome.key_facts_to_include.append(f"blocked by {resolved[0].title}")
+                            outcome.suggested_next_step = self._next_step_for_task(resolved[0])
+                            outcome.should_ask_question = False
+                        else:
+                            outcome.should_ask_question = True
+                            outcome.question_if_needed = self._blocker_followup_question(matched.title)
                     self.reminders.schedule_for_task(session, matched)
                 else:
                     if intent.blockers:
                         outcome.response_goal = "replan_blocker"
-                        outcome.key_facts_to_include.append("blocker noted even without a specific task match")
+                        outcome.key_facts_to_include.append("blocker noted, but task match was uncertain")
                         outcome.key_facts_to_include.append(f"blocker: {intent.blockers[0]}")
                         outcome.should_ask_question = True
-                        outcome.question_if_needed = "what's the smallest next move to unblock this?"
+                        outcome.question_if_needed = "which task is blocked by that?"
                     else:
                         outcome.key_facts_to_include.append("update noted, but task match was uncertain")
                         outcome.should_ask_question = True
@@ -249,19 +326,383 @@ class StateEngine:
             ):
                 outcome.response_goal = "react_to_progress"
                 outcome.emotional_tone = "supportive"
-                next_task = self._next_task(session, user.id)
-                if next_task:
-                    title = next_task.title.strip()
-                    if len(title) > 60:
-                        title = f"{title[:57].rstrip()}..."
-                    outcome.suggested_next_step = f"take a first pass on '{title}'"
+                matched = self._match_task_from_text(session, user.id, raw_text) or self.timeline.recommend_next_task(
+                    session, user.id, user.timezone
+                )
+                if matched:
+                    record_task_progress(matched, next_step=self._next_step_for_task(matched))
+                    outcome.suggested_next_step = self._next_step_for_task(matched)
             else:
                 outcome.response_goal = "answer_question" if "?" in raw_text else "open_conversation"
-            outcome.emotional_tone = "casual"
-            outcome.should_push_for_action = False
+                outcome.emotional_tone = "casual"
+                outcome.should_push_for_action = False
 
         self._update_profile_memory(session, user.id, raw_text)
         return outcome
+
+    def _capture_tasks(
+        self,
+        session: Session,
+        *,
+        user,
+        extracted_tasks: list[ExtractedTask],
+        raw_text: str,
+        needs_time_clarification: bool,
+        time_reference: str | None,
+        time_confidence: float,
+    ) -> CaptureBundle:
+        bundle = CaptureBundle()
+        title_index: dict[str, Task] = {}
+        for extracted in extracted_tasks:
+            self._create_task_tree(
+                session,
+                user=user,
+                extracted=extracted,
+                raw_text=raw_text,
+                bundle=bundle,
+                title_index=title_index,
+                parent_task=None,
+                inherited_project_id=None,
+            )
+
+        for entry in bundle.entries:
+            if entry.parent_task is not None:
+                if self._ensure_dependency(
+                    session,
+                    user_id=user.id,
+                    predecessor_task=entry.task,
+                    successor_task=entry.parent_task,
+                    dependency_type="subtask",
+                    metadata_json={"source": "extracted_subtask"},
+                ):
+                    bundle.dependency_count += 1
+
+            dependency_count = self._apply_declared_dependencies(
+                session,
+                user=user,
+                task=entry.task,
+                extracted=entry.extracted,
+                title_index=title_index,
+                bundle=bundle,
+            )
+            bundle.dependency_count += dependency_count
+
+            blockers = entry.extracted.blockers
+            if blockers:
+                resolved = self._apply_blockers_to_task(
+                    session,
+                    user=user,
+                    task=entry.task,
+                    blocker_texts=blockers,
+                    title_index=title_index,
+                    bundle=bundle,
+                )
+                if not resolved and bundle.unresolved_blocker_task is None:
+                    bundle.unresolved_blocker_task = entry.task
+                    bundle.unresolved_blocker_text = blockers[0]
+
+            self._refresh_task_block_state(entry.task)
+
+        if needs_time_clarification and bundle.ambiguous_deadline_task is None and bundle.root_tasks:
+            bundle.ambiguous_deadline_task = bundle.root_tasks[0]
+            bundle.ambiguous_time_reference = time_reference or "that time"
+        elif time_reference and time_confidence < 0.6 and bundle.root_tasks and bundle.ambiguous_deadline_task is None:
+            bundle.ambiguous_deadline_task = bundle.root_tasks[0]
+            bundle.ambiguous_time_reference = time_reference
+
+        for entry in bundle.entries:
+            reminder = self.reminders.schedule_for_task(session, entry.task)
+            if reminder:
+                bundle.reminder_count += 1
+        return bundle
+
+    def _create_task_tree(
+        self,
+        session: Session,
+        *,
+        user,
+        extracted: ExtractedTask,
+        raw_text: str,
+        bundle: CaptureBundle,
+        title_index: dict[str, Task],
+        parent_task: Task | None,
+        inherited_project_id,
+    ) -> Task:
+        project_id = inherited_project_id
+        if extracted.project:
+            project = self._get_or_create_project(session, user.id, extracted.project)
+            project_id = project.id
+
+        deadline_source = extracted.deadline.source_phrase if extracted.deadline else extracted.deadline_text
+        deadline_at = extracted.deadline.deadline_at if extracted.deadline and extracted.deadline.deadline_at else extracted.deadline_at
+        soft_deadline_at = (
+            extracted.deadline.soft_deadline_at if extracted.deadline and extracted.deadline.soft_deadline_at else extracted.soft_deadline_at
+        )
+        deadline_confidence = extracted.deadline.confidence if extracted.deadline else extracted.confidence
+        deadline_is_ambiguous = extracted.deadline.is_ambiguous if extracted.deadline else False
+        deadline_granularity = extracted.deadline.granularity if extracted.deadline else "unknown"
+        deadline_timezone = extracted.deadline.timezone if extracted.deadline else user.timezone
+        next_step = extracted.next_step or self._default_next_step(extracted.title)
+
+        task = create_task(
+            session,
+            user_id=user.id,
+            title=extracted.title,
+            description=extracted.description,
+            project_id=project_id,
+            parent_task_id=parent_task.id if parent_task else None,
+            next_step=next_step,
+            deadline_at=deadline_at,
+            soft_deadline_at=soft_deadline_at,
+            deadline_source_phrase=deadline_source,
+            deadline_confidence=deadline_confidence,
+            deadline_is_ambiguous=deadline_is_ambiguous,
+            deadline_granularity=deadline_granularity,
+            deadline_timezone=deadline_timezone,
+            priority=extracted.priority,
+            extraction_confidence=extracted.confidence,
+            metadata_json={
+                "source_text": raw_text,
+                "extracted_blockers": extracted.blockers,
+                "declared_dependency_titles": [dependency.title for dependency in extracted.dependencies],
+            },
+        )
+        task.user = user
+        bundle.entries.append(CapturedTaskEntry(extracted=extracted, task=task, parent_task=parent_task))
+        if parent_task is None:
+            bundle.root_tasks.append(task)
+        title_index.setdefault(self._normalize_title(task.title), task)
+
+        if task.deadline_at:
+            session.add(
+                DeadlineEvent(
+                    user_id=user.id,
+                    task_id=task.id,
+                    title=f"Deadline: {task.title}",
+                    due_at=task.deadline_at,
+                    source="message_parse",
+                    confidence=deadline_confidence,
+                )
+            )
+            bundle.deadline_tasks.append(task)
+        if deadline_is_ambiguous and bundle.ambiguous_deadline_task is None:
+            bundle.ambiguous_deadline_task = task
+            bundle.ambiguous_time_reference = deadline_source or extracted.deadline_text or "that time"
+
+        for subtask in extracted.subtasks:
+            bundle.subtask_count += 1
+            child = self._create_task_tree(
+                session,
+                user=user,
+                extracted=subtask,
+                raw_text=raw_text,
+                bundle=bundle,
+                title_index=title_index,
+                parent_task=task,
+                inherited_project_id=project_id,
+            )
+            title_index.setdefault(self._normalize_title(child.title), child)
+        return task
+
+    def _apply_declared_dependencies(
+        self,
+        session: Session,
+        *,
+        user,
+        task: Task,
+        extracted: ExtractedTask,
+        title_index: dict[str, Task],
+        bundle: CaptureBundle,
+    ) -> int:
+        created_count = 0
+        for dependency in extracted.dependencies:
+            related = self._resolve_dependency_task(
+                session,
+                user=user,
+                task=task,
+                dependency=dependency,
+                title_index=title_index,
+                bundle=bundle,
+            )
+            if related is None or related.id == task.id:
+                continue
+            predecessor = related
+            successor = task
+            dependency_type = "finish_to_start"
+            metadata = {"source": "declared_dependency", "relation": dependency.relation}
+
+            if dependency.relation == "blocks":
+                predecessor = task
+                successor = related
+            elif dependency.relation == "subtask_of":
+                task.parent_task_id = related.id
+                predecessor = task
+                successor = related
+                dependency_type = "subtask"
+            elif dependency.relation == "related_to":
+                dependency_type = "related_to"
+
+            if self._ensure_dependency(
+                session,
+                user_id=user.id,
+                predecessor_task=predecessor,
+                successor_task=successor,
+                dependency_type=dependency_type,
+                metadata_json=metadata,
+            ):
+                created_count += 1
+        return created_count
+
+    def _resolve_dependency_task(
+        self,
+        session: Session,
+        *,
+        user,
+        task: Task,
+        dependency: ExtractedDependency,
+        title_index: dict[str, Task],
+        bundle: CaptureBundle,
+    ) -> Task | None:
+        existing = self._lookup_task_by_title(session, user.id, dependency.title, title_index=title_index)
+        if existing is not None:
+            return existing
+
+        normalized_title = self._canonicalize_dependency_title(dependency.title)
+        if normalized_title is None:
+            return None
+        related = create_task(
+            session,
+            user_id=user.id,
+            title=normalized_title,
+            priority=max(3, task.priority),
+            next_step=self._default_next_step(normalized_title),
+            extraction_confidence=dependency.confidence,
+            metadata_json={"created_from_dependency": dependency.title, "notes": dependency.notes},
+        )
+        related.user = user
+        title_index[self._normalize_title(related.title)] = related
+        bundle.created_prerequisites.append(related)
+        return related
+
+    def _apply_blockers_to_task(
+        self,
+        session: Session,
+        *,
+        user,
+        task: Task,
+        blocker_texts: list[str],
+        title_index: dict[str, Task],
+        bundle: CaptureBundle | None,
+    ) -> list[Task]:
+        resolved: list[Task] = []
+        for blocker_text in blocker_texts:
+            prerequisite = self._resolve_prerequisite_task(
+                session,
+                user=user,
+                blocker_text=blocker_text,
+                title_index=title_index,
+            )
+            if prerequisite is None or prerequisite.id == task.id:
+                continue
+            if self._ensure_dependency(
+                session,
+                user_id=user.id,
+                predecessor_task=prerequisite,
+                successor_task=task,
+                dependency_type="finish_to_start",
+                metadata_json={"source": "blocker_text", "raw_text": blocker_text},
+            ):
+                if bundle is not None:
+                    bundle.dependency_count += 1
+            resolved.append(prerequisite)
+            if bundle is not None and prerequisite not in bundle.created_prerequisites and prerequisite.created_at == prerequisite.updated_at:
+                # Heuristic: freshly created prerequisites have identical timestamps in tests/local DB.
+                bundle.created_prerequisites.append(prerequisite)
+
+        unresolved_dependencies = [prereq for prereq in resolved if prereq.status != TaskStatus.completed]
+        if unresolved_dependencies:
+            set_task_blocked(
+                task,
+                reason=blocker_texts[0],
+                blocker_details_json={
+                    "blockers": blocker_texts,
+                    "dependency_titles": [prereq.title for prereq in unresolved_dependencies],
+                    "dependency_task_ids": [str(prereq.id) for prereq in unresolved_dependencies],
+                },
+            )
+        elif blocker_texts and not resolved:
+            set_task_blocked(
+                task,
+                reason=blocker_texts[0],
+                blocker_details_json={"blockers": blocker_texts},
+            )
+            if bundle is not None and bundle.unresolved_blocker_task is None:
+                bundle.unresolved_blocker_task = task
+                bundle.unresolved_blocker_text = blocker_texts[0]
+        return resolved
+
+    def _resolve_prerequisite_task(
+        self,
+        session: Session,
+        *,
+        user,
+        blocker_text: str,
+        title_index: dict[str, Task],
+    ) -> Task | None:
+        existing = self._lookup_task_by_title(session, user.id, blocker_text, title_index=title_index)
+        if existing is not None:
+            return existing
+
+        normalized_title = self._normalize_blocker_to_task_title(blocker_text)
+        if normalized_title is None:
+            return None
+
+        existing = self._lookup_task_by_title(session, user.id, normalized_title, title_index=title_index)
+        if existing is not None:
+            return existing
+
+        prerequisite = create_task(
+            session,
+            user_id=user.id,
+            title=normalized_title,
+            priority=3,
+            next_step=self._default_next_step(normalized_title),
+            extraction_confidence=0.72,
+            metadata_json={"created_from_blocker": blocker_text},
+        )
+        prerequisite.user = user
+        title_index[self._normalize_title(prerequisite.title)] = prerequisite
+        return prerequisite
+
+    @staticmethod
+    def _ensure_dependency(
+        session: Session,
+        *,
+        user_id,
+        predecessor_task: Task,
+        successor_task: Task,
+        dependency_type: str,
+        metadata_json: dict | None = None,
+    ) -> bool:
+        existing = session.execute(
+            select(TaskDependency).where(
+                TaskDependency.user_id == user_id,
+                TaskDependency.predecessor_task_id == predecessor_task.id,
+                TaskDependency.successor_task_id == successor_task.id,
+                TaskDependency.dependency_type == dependency_type,
+            )
+        ).scalars().first()
+        if existing is not None:
+            return False
+        create_task_dependency(
+            session,
+            user_id=user_id,
+            predecessor_task_id=predecessor_task.id,
+            successor_task_id=successor_task.id,
+            dependency_type=dependency_type,
+            metadata_json=metadata_json or {},
+        )
+        return True
 
     @staticmethod
     def _clear_active_tasks(session: Session, user_id) -> int:
@@ -307,12 +748,16 @@ class StateEngine:
             return f"do a final proofread, then submit {title}"
         if lowered.startswith("send "):
             return title
-        if "send" in lowered or "email" in lowered:
+        if "send" in lowered or "email" in lowered or "text" in lowered:
             return f"send {title}"
         if lowered.startswith("finish "):
             return title
         if "finish" in lowered:
             return f"finish the first complete pass on {title}"
+        if lowered.startswith("fix "):
+            return title
+        if lowered.startswith("review "):
+            return title
         return f"start a 20-min first pass on {title}"
 
     @staticmethod
@@ -338,12 +783,17 @@ class StateEngine:
         return f"quick clarify: for '{cleaned_task}', what exact time should i use for '{cleaned_ref}'?"
 
     @staticmethod
+    def _blocker_followup_question(task_title: str) -> str:
+        cleaned_task = task_title.strip()
+        if len(cleaned_task) > 70:
+            cleaned_task = f"{cleaned_task[:67].rstrip()}..."
+        return f"what has to happen first before '{cleaned_task}' can move?"
+
+    @staticmethod
     def _urgency_from_deadline(deadline_at: datetime, timezone_name: str) -> str:
         now = datetime.now(tz=ZoneInfo(timezone_name))
-        if deadline_at.tzinfo is None:
-            deadline = deadline_at.replace(tzinfo=ZoneInfo(timezone_name))
-        else:
-            deadline = deadline_at.astimezone(ZoneInfo(timezone_name))
+        deadline = deadline_at if deadline_at.tzinfo else deadline_at.replace(tzinfo=ZoneInfo(timezone_name))
+        deadline = deadline.astimezone(ZoneInfo(timezone_name))
         delta = deadline - now
         if delta <= timedelta(hours=3):
             return "critical"
@@ -364,24 +814,216 @@ class StateEngine:
         session.flush()
         return project
 
-    @staticmethod
-    def _match_task_from_text(session: Session, user_id, text: str) -> Task | None:
-        pieces = [segment.strip() for segment in text.lower().split() if len(segment.strip()) > 3]
+    def _match_task_from_text(self, session: Session, user_id, text: str) -> Task | None:
+        lowered = text.lower()
+        tasks = list_active_tasks(session, user_id)
+        best: Task | None = None
+        best_score = 0
+        for task in tasks:
+            title = task.title.lower()
+            score = 0
+            if title in lowered:
+                score += len(title) + 40
+            tokens = [token for token in re.findall(r"[a-z0-9]+", title) if len(token) > 2]
+            score += sum(len(token) for token in tokens if token in lowered)
+            if score > best_score:
+                best = task
+                best_score = score
+        if best is not None and best_score >= 6:
+            return best
+
+        pieces = [segment.strip() for segment in re.findall(r"[a-z0-9]+", lowered) if len(segment.strip()) > 3]
         for piece in pieces[:8]:
             found = find_active_task_by_title(session, user_id, piece)
             if found:
                 return found
         return None
 
+    def _resolve_update_target(self, session: Session, user_id, raw_text: str, blockers: list[str]) -> Task | None:
+        matched = self._match_task_from_text(session, user_id, raw_text)
+        if matched is not None:
+            return matched
+        active = list_active_tasks(session, user_id)
+        if blockers and len(active) == 1:
+            return active[0]
+        return None
+
+    def _refresh_task_block_state(self, task: Task) -> bool:
+        unresolved = [link.predecessor_task for link in task.successor_links if link.predecessor_task.status != TaskStatus.completed]
+        if unresolved:
+            task.status = TaskStatus.blocked
+            if task.blocked_at is None:
+                task.blocked_at = datetime.now(tz=timezone.utc)
+            task.blocked_reason = task.blocked_reason or f"waiting on {unresolved[0].title}"
+            details = dict(task.blocker_details_json or {})
+            details["dependency_titles"] = [dependency.title for dependency in unresolved]
+            details["dependency_task_ids"] = [str(dependency.id) for dependency in unresolved]
+            task.blocker_details_json = details
+            return False
+
+        if task.status == TaskStatus.blocked and (task.successor_links or self._is_dependency_block(task)):
+            task.status = TaskStatus.active
+            task.blocked_reason = None
+            task.blocked_at = None
+            details = dict(task.blocker_details_json or {})
+            details.pop("dependency_titles", None)
+            details.pop("dependency_task_ids", None)
+            task.blocker_details_json = details
+            return True
+        return False
+
+    def _refresh_successors(self, completed_task: Task) -> list[Task]:
+        newly_unblocked: list[Task] = []
+        for link in completed_task.predecessor_links:
+            successor = link.successor_task
+            if successor is None or successor.status not in {TaskStatus.active, TaskStatus.blocked}:
+                continue
+            if self._refresh_task_block_state(successor):
+                newly_unblocked.append(successor)
+        return newly_unblocked
+
     @staticmethod
-    def _next_task(session: Session, user_id) -> Task | None:
-        tasks = list_active_tasks(session, user_id)
-        return tasks[0] if tasks else None
+    def _is_dependency_block(task: Task) -> bool:
+        details = task.blocker_details_json or {}
+        return bool(details.get("dependency_titles") or details.get("dependency_task_ids") or (task.blocked_reason or "").startswith("waiting on "))
+
+    def _reflection_target(self, session: Session, user_id, raw_text: str, timezone_name: str) -> Task | None:
+        matched = self._match_task_from_text(session, user_id, raw_text)
+        if matched is not None:
+            return matched
+        return self.timeline.recommend_next_task(session, user_id, timezone_name)
+
+    def _next_step_for_task(self, task: Task) -> str:
+        unresolved = [link.predecessor_task for link in task.successor_links if link.predecessor_task.status != TaskStatus.completed]
+        if unresolved:
+            prerequisite = unresolved[0]
+            return prerequisite.next_step or self._default_next_step(prerequisite.title)
+        if task.next_step:
+            return task.next_step
+        active_subtasks = [subtask for subtask in task.subtasks if subtask.status in {TaskStatus.active, TaskStatus.blocked}]
+        if active_subtasks:
+            subtask = active_subtasks[0]
+            return subtask.next_step or self._default_next_step(subtask.title)
+        return self._default_next_step(task.title)
+
+    @staticmethod
+    def _task_context(task: Task) -> ReplyTaskContext:
+        return ReplyTaskContext(
+            title=task.title,
+            status=task.status.value,
+            deadline_at=task.deadline_at,
+            deadline_text=task.deadline_source_phrase,
+            next_step=task.next_step,
+            blocker=task.blocked_reason,
+            reminder_escalation_level=task.reminder_escalation_level,
+            slip_count=task.slip_count,
+            is_subtask=task.parent_task_id is not None,
+        )
+
+    def _lookup_task_by_title(self, session: Session, user_id, title: str, *, title_index: dict[str, Task]) -> Task | None:
+        normalized = self._normalize_title(title)
+        if normalized in title_index:
+            return title_index[normalized]
+        found = self._find_task_any_status(session, user_id, title)
+        if found is not None:
+            title_index.setdefault(normalized, found)
+        return found
+
+    @staticmethod
+    def _find_task_any_status(session: Session, user_id, title_fragment: str) -> Task | None:
+        fragment = f"%{title_fragment.strip().lower()}%"
+        stmt = (
+            select(Task)
+            .where(Task.user_id == user_id, Task.title.ilike(fragment))
+            .order_by(Task.updated_at.desc())
+        )
+        return session.execute(stmt).scalars().first()
+
+    @staticmethod
+    def _normalize_title(title: str) -> str:
+        return re.sub(r"\s+", " ", title.strip().lower())
+
+    @staticmethod
+    def _canonicalize_dependency_title(title: str) -> str | None:
+        cleaned = re.sub(r"\s+", " ", title.strip())
+        return cleaned[:1].upper() + cleaned[1:] if cleaned else None
+
+    @staticmethod
+    def _normalize_blocker_to_task_title(blocker_text: str) -> str | None:
+        cleaned = blocker_text.strip().lower()
+        cleaned = re.sub(r"^(i\s+)?(need|have|gotta|must)\s+to\s+", "", cleaned)
+        cleaned = re.sub(r"^(i\s+)?need\s+", "", cleaned)
+        cleaned = re.sub(r"^(before|until)\s+", "", cleaned)
+        cleaned = re.sub(r"\b(first|before this|before that|before i can|before it can)\b", "", cleaned)
+        cleaned = cleaned.replace(" rn", "")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,!?:;")
+        if not cleaned:
+            return None
+
+        actionable_verbs = (
+            "fix",
+            "finish",
+            "send",
+            "submit",
+            "export",
+            "make",
+            "do",
+            "call",
+            "email",
+            "text",
+            "review",
+            "update",
+            "build",
+            "draft",
+            "write",
+            "upload",
+            "get",
+            "find",
+            "ask",
+            "check",
+            "schedule",
+            "clean",
+            "polish",
+            "prep",
+            "prepare",
+        )
+        if cleaned.startswith("waiting on ") or cleaned.startswith("wait for "):
+            return None
+        if cleaned.split()[0] not in actionable_verbs:
+            if len(cleaned.split()) <= 5:
+                cleaned = f"get {cleaned}"
+            else:
+                return None
+        return cleaned[:1].upper() + cleaned[1:]
+
+    @staticmethod
+    def _next_pending_reminder_for_task(session: Session, task_id) -> Reminder | None:
+        stmt = (
+            select(Reminder)
+            .where(Reminder.task_id == task_id, Reminder.status == ReminderStatus.pending)
+            .order_by(Reminder.scheduled_for.asc())
+        )
+        return session.execute(stmt).scalars().first()
+
+    @staticmethod
+    def _normalize_dt(value: datetime | None, timezone_name: str) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=ZoneInfo(timezone_name))
+        return value.astimezone(ZoneInfo(timezone_name))
+
+    @staticmethod
+    def _format_due(value: datetime | None, timezone_name: str) -> str | None:
+        if value is None:
+            return None
+        due = value if value.tzinfo else value.replace(tzinfo=ZoneInfo(timezone_name))
+        return due.astimezone(ZoneInfo(timezone_name)).strftime("%a %-m/%-d %-I:%M%p").lower()
 
     @staticmethod
     def _update_profile_memory(session: Session, user_id, raw_text: str) -> None:
         lowered = raw_text.lower()
-        if any(token in lowered for token in ["underestimated", "distracted", "switching", "conflict"]):
+        if any(token in lowered for token in ["underestimated", "distracted", "switching", "conflict", "overwhelmed", "avoid"]):
             note = PlanningNote(
                 user_id=user_id,
                 note_type="behavior_pattern",

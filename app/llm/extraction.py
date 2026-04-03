@@ -3,13 +3,19 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from app.core.time_utils import parse_human_time
+from app.core.time_utils import interpret_time_reference, parse_human_time
 from app.core.config import get_settings
 from app.llm.client import OllamaAdapter
-from app.schemas.intent import ExtractedTask, IntentResult, IntentName, ImageExtractionResult
+from app.schemas.intent import ExtractedTask, ImageExtractionResult, IntentName, IntentResult, ParsedDeadline
 
 
 class IntentExtractor:
+    _TASK_START_PATTERN = (
+        r"(?:i\s+)?(?:need to|have to|gotta|must|should|want to|submit|finish|send|write|prepare|study|"
+        r"review|fix|build|make|do|call|email|text|update|work on|start|complete|wrap|clean|buy|plan|"
+        r"schedule|reply|apply|pay|draft|upload|design|model)"
+    )
+
     def __init__(self, adapter: OllamaAdapter | None = None) -> None:
         self.adapter = adapter or OllamaAdapter()
         self.settings = get_settings()
@@ -33,14 +39,16 @@ class IntentExtractor:
         payload = self.adapter.json_completion(
             system=(
                 "Classify intent and extract task/deadline fields from a single SMS message. "
+                "If the message contains multiple tasks, return them in tasks as separate task objects in message order. "
                 "Return JSON keys: intent, confidence, needs_clarification, clarification_question, "
-                "time_reference, time_confidence, context_signal, blockers, summary, task. "
-                "task.title must be concise and should not include time phrases like tonight/tomorrow/by eod."
+                "time_reference, time_confidence, context_signal, blockers, summary, task, tasks. "
+                "Each task.title must be concise and should not include time phrases like tonight/tomorrow/by eod. "
+                "Only ask a clarification when timing ambiguity would materially change planning or reminders."
             ),
             user=(
                 f"timezone={timezone}\n"
                 f"message={text}\n"
-                "task should be object with: title, description, project, deadline_text, priority, confidence, next_step."
+                "task objects should include: title, description, project, deadline_text, priority, confidence, next_step."
             ),
             options={
                 "temperature": 0.1,
@@ -53,11 +61,9 @@ class IntentExtractor:
         if not payload:
             return None
         try:
-            if payload.get("task"):
-                task = ExtractedTask.model_validate(payload["task"])
-                task.title = self._sanitize_task_title(task.title)
-            else:
-                task = None
+            raw_tasks = payload.get("tasks") or ([payload["task"]] if payload.get("task") else [])
+            tasks = [self._normalize_task(ExtractedTask.model_validate(raw_task), timezone) for raw_task in raw_tasks]
+            task = tasks[0] if tasks else None
             result = IntentResult(
                 intent=payload.get("intent", "general_chat"),
                 confidence=payload.get("confidence", 0.5),
@@ -69,12 +75,10 @@ class IntentExtractor:
                 blockers=payload.get("blockers", []),
                 summary=payload.get("summary"),
                 task=task,
+                tasks=tasks,
                 task_updates=payload.get("task_updates", {}),
             )
-            if result.task and result.task.deadline_text and not result.task.deadline_at:
-                parsed, conf = parse_human_time(result.task.deadline_text, timezone=timezone)
-                result.task.deadline_at = parsed
-                result.time_confidence = max(result.time_confidence, conf)
+            self._sync_result_timing(result=result, timezone=timezone)
             return result
         except Exception:
             return None
@@ -103,7 +107,8 @@ class IntentExtractor:
             "next hour",
         ]
         looks_timeline_query = any(token in lowered for token in timeline_query_cues)
-        looks_add_task = any(token in lowered for token in ["need to", "have to", "gotta", "assignment"])
+        candidate_tasks = self._extract_tasks_from_text(text, timezone)
+        looks_add_task = bool(candidate_tasks) or any(token in lowered for token in ["need to", "have to", "gotta", "assignment"])
         if looks_timeline_query and ("?" in lowered or lowered.startswith("what do i") or lowered.startswith("what's due")):
             looks_add_task = False
         if " due " in f" {lowered} " and not looks_timeline_query:
@@ -135,26 +140,40 @@ class IntentExtractor:
             return IntentResult(intent=intent, confidence=confidence, summary="user asked assistant capabilities")
         elif looks_add_task:
             intent = "add_task"
-            confidence = 0.78
-            extracted_title = self._simple_task_title(lowered)
-            deadline_text = self._extract_deadline_phrase(lowered)
-            deadline_at = None
-            time_conf = 0.0
-            if deadline_text:
-                deadline_at, time_conf = parse_human_time(deadline_text, timezone=timezone)
-            task = ExtractedTask(
-                title=extracted_title,
-                deadline_text=deadline_text,
-                deadline_at=deadline_at,
-                confidence=max(0.55, confidence),
+            tasks = candidate_tasks or self._extract_tasks_from_text(lowered, timezone)
+            if not tasks:
+                extracted_title = self._simple_task_title(lowered)
+                deadline_text = self._extract_deadline_phrase(lowered)
+                task = self._build_task_from_segment(
+                    lowered,
+                    timezone=timezone,
+                    fallback_title=extracted_title,
+                    deadline_text_override=deadline_text,
+                )
+                tasks = [task] if task else []
+            if not tasks:
+                return IntentResult(intent="general_chat", confidence=0.55)
+
+            confidence = 0.84 if len(tasks) > 1 else 0.78
+            primary_task = tasks[0]
+            primary_deadline = primary_task.deadline or ParsedDeadline(
+                source_phrase=primary_task.deadline_text,
+                confidence=0.0,
             )
+            needs_clarification = self._task_requires_time_clarification(primary_task)
+            clarification_question = None
+            if needs_clarification and primary_deadline.source_phrase:
+                clarification_question = self._clarification_for_task_time(primary_task.title, primary_deadline.source_phrase)
             return IntentResult(
                 intent=intent,
                 confidence=confidence,
-                time_reference=deadline_text,
-                time_confidence=time_conf,
-                needs_clarification=bool(deadline_text and (deadline_at is None or time_conf < 0.6)),
-                task=task,
+                time_reference=primary_deadline.source_phrase,
+                time_confidence=primary_deadline.confidence,
+                needs_clarification=needs_clarification,
+                clarification_question=clarification_question,
+                task=primary_task,
+                tasks=tasks,
+                summary=f"captured {len(tasks)} task{'s' if len(tasks) != 1 else ''}",
             )
         elif looks_timeline_query:
             intent = "timeline_query"
@@ -182,29 +201,34 @@ class IntentExtractor:
             return fallback
 
         if merged.intent == "add_task":
-            if not merged.task and fallback.task:
-                merged.task = fallback.task
-            if merged.task:
-                merged.task.title = self._sanitize_task_title(merged.task.title)
+            if not merged.tasks and fallback.tasks:
+                merged.tasks = fallback.tasks
+            elif len(fallback.tasks) > len(merged.tasks) and fallback.confidence >= 0.78:
+                merged.tasks = fallback.tasks
+            if not merged.task and merged.tasks:
+                merged.task = merged.tasks[0]
+            elif merged.task and not merged.tasks:
+                merged.tasks = [merged.task]
+            for task in merged.tasks:
+                task.title = self._sanitize_task_title(task.title)
+            if merged.tasks:
+                merged.task = merged.tasks[0]
 
         if not merged.time_reference and fallback.time_reference:
             merged.time_reference = fallback.time_reference
             merged.time_confidence = max(merged.time_confidence, fallback.time_confidence)
 
-        if merged.task and merged.task.deadline_text and not merged.task.deadline_at:
-            parsed, conf = parse_human_time(merged.task.deadline_text, timezone=timezone)
-            merged.task.deadline_at = parsed
-            merged.time_confidence = max(merged.time_confidence, conf)
+        self._sync_result_timing(result=merged, timezone=timezone)
 
-        if merged.time_reference and (not merged.task or not merged.task.deadline_at):
-            parsed, conf = parse_human_time(merged.time_reference, timezone=timezone)
-            if merged.task and parsed and not merged.task.deadline_at:
-                merged.task.deadline_at = parsed
-            merged.time_confidence = max(merged.time_confidence, conf)
-
-        if merged.time_reference and merged.time_confidence < 0.6 and not merged.needs_clarification:
+        if merged.task and self._task_requires_time_clarification(merged.task) and not merged.needs_clarification:
             merged.needs_clarification = True
-            merged.clarification_question = merged.clarification_question or self._clarification_for_time(merged.time_reference)
+            merged.clarification_question = (
+                merged.clarification_question
+                or self._clarification_for_task_time(
+                    merged.task.title,
+                    merged.task.deadline.source_phrase if merged.task.deadline else merged.time_reference or "that time",
+                )
+            )
 
         if merged.intent == "general_chat" and fallback.intent != "general_chat" and fallback.confidence >= 0.78:
             return fallback
@@ -227,6 +251,8 @@ class IntentExtractor:
             title = (llm_result.task.title or "").lower()
             if any(token in title for token in ("what do i", "get done", "what's due", "due this week", "tonight", "tomorrow")):
                 return True
+        if fallback.intent == "add_task" and len(fallback.tasks) > len(llm_result.tasks) and fallback.confidence >= 0.78:
+            return True
         if llm_result.intent == "add_task" and not llm_result.task and fallback.task is not None:
             return True
         return False
@@ -235,6 +261,12 @@ class IntentExtractor:
     def _clarification_for_time(time_reference: str) -> str:
         clean = time_reference.strip()
         return f"quick one: when exactly do you want '{clean}' to mean?"
+
+    @staticmethod
+    def _clarification_for_task_time(task_title: str, time_reference: str) -> str:
+        cleaned_task = task_title.strip()
+        cleaned_ref = time_reference.strip()
+        return f"quick clarify: for '{cleaned_task}', what exact time should i use for '{cleaned_ref}'?"
 
     @staticmethod
     def _looks_like_dependency_blocker(text: str) -> bool:
@@ -265,7 +297,7 @@ class IntentExtractor:
         cleaned = re.sub(r"^(yo|hey|ok|okay)\s+", "", text).strip()
         cleaned = cleaned.replace("need to ", "").replace("have to ", "")
         cleaned = re.sub(
-            r"\b(and then|then|tmr morning|tomorrow morning|tomorrow night|tonight|this weekend|by eod|eod)\b",
+            r"\b(and then|then|tmr morning|tomorrow morning|tomorrow night|tonight|this weekend|by eod|eod|later|after class|before studio)\b",
             "",
             cleaned,
         )
@@ -281,7 +313,7 @@ class IntentExtractor:
         cleaned = re.sub(r"^(need to|have to|gotta|want to|should|must)\s+", "", cleaned)
         cleaned = re.sub(r"^i\s+", "", cleaned)
         cleaned = re.sub(
-            r"\b(and then|tmr morning|tomorrow morning|tomorrow night|tonight|this weekend|by eod|eod)\b",
+            r"\b(and then|tmr morning|tomorrow morning|tomorrow night|tonight|this weekend|by eod|eod|later|after class|before studio)\b",
             "",
             cleaned,
         )
@@ -295,22 +327,183 @@ class IntentExtractor:
     @staticmethod
     def _extract_deadline_phrase(text: str) -> str | None:
         patterns = [
-            r"\bby [^,.!?]+",
-            r"\bdue [^,.!?]+",
+            r"\bby eod\b",
+            r"\beod\b",
             r"\btomorrow(?: morning| night)?\b",
             r"\btonight\b",
             r"\bthis weekend\b",
             r"\blater\b",
             r"\bafter class\b",
             r"\bbefore studio\b",
-            r"\bbefore [^,.!?]+",
-            r"\beod\b",
+            r"\bby [^,.;!?]+",
+            r"\bdue [^,.;!?]+",
+            r"\bbefore [^,.;!?]+",
         ]
         for pattern in patterns:
-            match = re.search(pattern, text)
+            match = re.search(pattern, text, flags=re.IGNORECASE)
             if match:
                 return match.group(0)
         return None
+
+    def _extract_tasks_from_text(self, text: str, timezone: str) -> list[ExtractedTask]:
+        tasks: list[ExtractedTask] = []
+        seen_titles: set[str] = set()
+        for segment in self._split_task_segments(text):
+            task = self._build_task_from_segment(segment, timezone=timezone)
+            if not task:
+                continue
+            dedupe_key = f"{task.title.lower()}::{(task.deadline_text or '').lower()}"
+            if dedupe_key in seen_titles:
+                continue
+            seen_titles.add(dedupe_key)
+            tasks.append(task)
+        return tasks
+
+    def _build_task_from_segment(
+        self,
+        segment: str,
+        *,
+        timezone: str,
+        fallback_title: str | None = None,
+        deadline_text_override: str | None = None,
+    ) -> ExtractedTask | None:
+        lowered = segment.lower().strip(" .,!?")
+        if not lowered:
+            return None
+        if not fallback_title and not self._looks_like_task_segment(lowered):
+            return None
+
+        deadline_text = deadline_text_override or self._extract_deadline_phrase(segment)
+        title_source = segment
+        if deadline_text:
+            title_source = re.sub(re.escape(deadline_text), "", title_source, count=1, flags=re.IGNORECASE)
+        title = fallback_title or self._sanitize_task_title(title_source)
+        if title == "Task update" and not deadline_text:
+            return None
+
+        parsed_deadline = self._parse_deadline(deadline_text, timezone) if deadline_text else None
+        task_confidence = 0.74
+        if re.search(rf"^(?:yo|hey|ok|okay|alright|and\s+then|then\s+)?{self._TASK_START_PATTERN}\b", lowered):
+            task_confidence = 0.82
+        if parsed_deadline:
+            task_confidence = max(task_confidence, min(0.9, parsed_deadline.confidence + 0.1))
+
+        return ExtractedTask(
+            title=title,
+            deadline_text=deadline_text,
+            deadline_at=parsed_deadline.deadline_at if parsed_deadline else None,
+            soft_deadline_at=parsed_deadline.soft_deadline_at if parsed_deadline else None,
+            confidence=task_confidence,
+            deadline=parsed_deadline,
+        )
+
+    def _normalize_task(self, task: ExtractedTask, timezone: str) -> ExtractedTask:
+        task.title = self._sanitize_task_title(task.title)
+        if not task.deadline_text and task.deadline and task.deadline.source_phrase:
+            task.deadline_text = task.deadline.source_phrase
+        if task.deadline_text:
+            parsed_deadline = self._parse_deadline(task.deadline_text, timezone)
+            task.deadline = self._merge_deadlines(task.deadline, parsed_deadline, timezone)
+            if task.deadline_at is None:
+                task.deadline_at = task.deadline.deadline_at
+            if task.soft_deadline_at is None:
+                task.soft_deadline_at = task.deadline.soft_deadline_at
+        elif task.deadline and not task.deadline.timezone:
+            task.deadline.timezone = timezone
+        return task
+
+    def _sync_result_timing(self, *, result: IntentResult, timezone: str) -> None:
+        if result.task and not result.tasks:
+            result.tasks = [result.task]
+        if result.tasks and not result.task:
+            result.task = result.tasks[0]
+        if result.intent != "add_task":
+            return
+
+        for index, task in enumerate(result.tasks):
+            if not task.deadline_text and result.time_reference and index == 0:
+                task.deadline_text = result.time_reference
+            result.tasks[index] = self._normalize_task(task, timezone)
+        if result.tasks:
+            result.task = result.tasks[0]
+
+        primary_task = result.task
+        if primary_task and primary_task.deadline:
+            result.time_reference = result.time_reference or primary_task.deadline.source_phrase
+            result.time_confidence = max(result.time_confidence, primary_task.deadline.confidence)
+            if not result.needs_clarification and self._task_requires_time_clarification(primary_task):
+                result.needs_clarification = True
+                if primary_task.deadline.source_phrase:
+                    result.clarification_question = result.clarification_question or self._clarification_for_task_time(
+                        primary_task.title,
+                        primary_task.deadline.source_phrase,
+                    )
+
+    @staticmethod
+    def _merge_deadlines(existing: ParsedDeadline | None, parsed: ParsedDeadline, timezone: str) -> ParsedDeadline:
+        if existing is None:
+            if not parsed.timezone:
+                parsed.timezone = timezone
+            return parsed
+        existing.source_phrase = existing.source_phrase or parsed.source_phrase
+        existing.deadline_at = existing.deadline_at or parsed.deadline_at
+        existing.soft_deadline_at = existing.soft_deadline_at or parsed.soft_deadline_at
+        existing.timezone = existing.timezone or timezone
+        existing.confidence = max(existing.confidence, parsed.confidence)
+        existing.is_ambiguous = existing.is_ambiguous or parsed.is_ambiguous
+        existing.ambiguity_reason = existing.ambiguity_reason or parsed.ambiguity_reason
+        if existing.granularity == "unknown":
+            existing.granularity = parsed.granularity
+        return existing
+
+    @staticmethod
+    def _parse_deadline(deadline_text: str, timezone: str) -> ParsedDeadline:
+        return interpret_time_reference(deadline_text, timezone=timezone)
+
+    def _split_task_segments(self, text: str) -> list[str]:
+        normalized = re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
+        if not normalized:
+            return []
+
+        segments = [normalized]
+        split_patterns = [
+            r"\s*;\s*",
+            r"\s+(?:and then|then|also|plus)\s+",
+            rf",\s*(?=(?:then\s+)?{self._TASK_START_PATTERN}\b)",
+            rf"\s+and\s+(?=(?:then\s+)?{self._TASK_START_PATTERN}\b)",
+        ]
+        for pattern in split_patterns:
+            next_segments: list[str] = []
+            for segment in segments:
+                next_segments.extend(part for part in re.split(pattern, segment, flags=re.IGNORECASE) if part.strip())
+            segments = next_segments
+        return segments
+
+    def _looks_like_task_segment(self, text: str) -> bool:
+        if "?" in text:
+            return False
+        if re.search(rf"^(?:yo|hey|ok|okay|alright|and\s+then|then\s+)?{self._TASK_START_PATTERN}\b", text):
+            return True
+        if "assignment" in text or "project" in text:
+            return True
+        deadline_text = self._extract_deadline_phrase(text)
+        return deadline_text is not None and bool(
+            re.search(r"\b(submit|finish|send|prepare|fix|study|write|review|apply|upload|pay|draft|reply|complete)\b", text),
+        )
+
+    @staticmethod
+    def _task_requires_time_clarification(task: ExtractedTask) -> bool:
+        deadline = task.deadline
+        if not deadline or not deadline.source_phrase:
+            return False
+        if not deadline.is_ambiguous:
+            return False
+        phrase = deadline.source_phrase.lower()
+        if "this weekend" in phrase:
+            return False
+        if deadline.deadline_at is None:
+            return True
+        return any(token in phrase for token in ("later", "after class", "before studio"))
 
     @staticmethod
     def _is_meta_or_capability_query(text: str) -> bool:
@@ -394,6 +587,8 @@ class IntentExtractor:
             return False
         # Avoid short-circuiting multi-task chains like "and then ..."
         if any(token in text for token in (" and then ", ";", " also ", " plus ")):
+            return False
+        if re.search(rf"\sand\s+(?=(?:then\s+)?{IntentExtractor._TASK_START_PATTERN}\b)", text):
             return False
         return any(token in text for token in ("need to", "have to", "gotta", "must", "assignment", "submit", "finish", "send"))
 

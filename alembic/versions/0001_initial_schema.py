@@ -366,4 +366,3 @@ def downgrade() -> None:
     reminder_status_enum.drop(op.get_bind(), checkfirst=True)
     task_status_enum.drop(op.get_bind(), checkfirst=True)
     message_direction_enum.drop(op.get_bind(), checkfirst=True)
-

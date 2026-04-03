@@ -20,6 +20,8 @@ class FakeAdapter:
         self.calls = 0
         self.text_calls = 0
         self.models: list[str | None] = []
+        self.user_payloads: list[str] = []
+        self.system_prompts: list[str] = []
 
     def json_completion(  # noqa: ANN001
         self,
@@ -32,6 +34,8 @@ class FakeAdapter:
     ):
         self.calls += 1
         self.models.append(model)
+        self.user_payloads.append(user)
+        self.system_prompts.append(system)
         if self.json_responses:
             return self.json_responses.pop(0)
         return None
@@ -47,6 +51,8 @@ class FakeAdapter:
     ):
         self.text_calls += 1
         self.models.append(model)
+        self.user_payloads.append(user)
+        self.system_prompts.append(system)
         if self.text_responses:
             return self.text_responses.pop(0)
         # Simulate second-attempt regeneration by returning a clean default when queue is exhausted.
@@ -494,3 +500,48 @@ def test_short_checkin_merges_tiny_lead_bubble():
     assert reply.used_fallback is False
     assert len(reply.messages) == 1
     assert "what's the move right now?" in reply.messages[0].lower()
+
+
+def test_composer_includes_style_guardrails_and_action_flags_in_payload():
+    adapter = FakeAdapter([], enabled=True, json_responses=[{"messages": ["start with the CAD pass for 15, then text me."]}])
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="open_conversation",
+            latest_user_message="i'm lowkey overwhelmed",
+            style_mode="direct",
+            should_push_for_action=True,
+            suggested_next_step="start the CAD pass for 15 minutes",
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.used_fallback is False
+    payload = "\n".join(adapter.user_payloads)
+    assert "STYLE RULES:" in payload or "style rules:" in payload
+    assert "SHOULD PUSH TO ONE NEXT MOVE: yes" in payload or "push to one next move: yes" in payload
+    assert "lead with the decision or next action" in payload
+
+
+def test_composer_regenerates_when_reply_is_long_and_does_not_narrow_to_one_move():
+    adapter = FakeAdapter(
+        [
+            "you've got a few moving pieces tonight, and there are a couple ways you could approach them depending on your energy and what feels most manageable, so i'd think through the list a little and then we can figure out what order makes sense from there.",
+            "start with the statics sheet for 15, then text me when you stop.",
+        ],
+        enabled=True,
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="open_conversation",
+            latest_user_message="i'm overwhelmed",
+            should_push_for_action=True,
+            suggested_next_step="start the statics sheet for 15 minutes",
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.used_fallback is False
+    assert reply.regenerated_for_repetition is True
+    lowered = " ".join(reply.messages).lower()
+    assert "start with the statics sheet" in lowered
+    assert len(lowered.split()) <= 20

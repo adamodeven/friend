@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Reminder, ReminderStatus, Task, TaskStatus
+from app.db.models import Reminder, ReminderStatus, Task, TaskDependency, TaskStatus
 
 
 def create_task(
@@ -16,10 +16,28 @@ def create_task(
     title: str,
     description: str | None = None,
     project_id: uuid.UUID | None = None,
+    source_message_id: uuid.UUID | None = None,
     parent_task_id: uuid.UUID | None = None,
+    next_step: str | None = None,
     deadline_at: datetime | None = None,
     soft_deadline_at: datetime | None = None,
+    deadline_source_phrase: str | None = None,
+    deadline_confidence: float = 0.0,
+    deadline_is_ambiguous: bool = False,
+    deadline_granularity: str = "unknown",
+    deadline_timezone: str | None = None,
     priority: int = 2,
+    started_at: datetime | None = None,
+    last_progress_at: datetime | None = None,
+    blocked_reason: str | None = None,
+    blocked_at: datetime | None = None,
+    blocker_details_json: dict | None = None,
+    slip_count: int = 0,
+    last_slipped_at: datetime | None = None,
+    last_slip_reason: str | None = None,
+    reminder_escalation_level: int = 0,
+    last_reminder_at: datetime | None = None,
+    reminder_pause_until: datetime | None = None,
     extraction_confidence: float = 0.6,
     metadata_json: dict | None = None,
 ) -> Task:
@@ -28,10 +46,28 @@ def create_task(
         title=title,
         description=description,
         project_id=project_id,
+        source_message_id=source_message_id,
         parent_task_id=parent_task_id,
+        next_step=next_step,
         deadline_at=deadline_at,
         soft_deadline_at=soft_deadline_at,
+        deadline_source_phrase=deadline_source_phrase,
+        deadline_confidence=deadline_confidence,
+        deadline_is_ambiguous=deadline_is_ambiguous,
+        deadline_granularity=deadline_granularity,
+        deadline_timezone=deadline_timezone,
         priority=priority,
+        started_at=started_at,
+        last_progress_at=last_progress_at,
+        blocked_reason=blocked_reason,
+        blocked_at=blocked_at,
+        blocker_details_json=blocker_details_json or {},
+        slip_count=slip_count,
+        last_slipped_at=last_slipped_at,
+        last_slip_reason=last_slip_reason,
+        reminder_escalation_level=reminder_escalation_level,
+        last_reminder_at=last_reminder_at,
+        reminder_pause_until=reminder_pause_until,
         extraction_confidence=extraction_confidence,
         metadata_json=metadata_json or {},
     )
@@ -80,8 +116,94 @@ def list_upcoming_deadlines(session: Session, user_id: uuid.UUID, within_days: i
 
 
 def mark_task_complete(task: Task) -> None:
+    now = datetime.now(tz=timezone.utc)
     task.status = TaskStatus.completed
-    task.completed_at = datetime.now(tz=timezone.utc)
+    task.completed_at = now
+    task.last_progress_at = now
+    task.blocked_at = None
+    task.blocked_reason = None
+
+
+def record_task_progress(
+    task: Task,
+    *,
+    at: datetime | None = None,
+    next_step: str | None = None,
+) -> None:
+    now = at or datetime.now(tz=timezone.utc)
+    if task.started_at is None:
+        task.started_at = now
+    task.last_progress_at = now
+    if next_step is not None:
+        task.next_step = next_step
+
+
+def set_task_blocked(
+    task: Task,
+    *,
+    reason: str,
+    blocker_details_json: dict | None = None,
+    at: datetime | None = None,
+) -> None:
+    task.status = TaskStatus.blocked
+    task.blocked_reason = reason
+    task.blocked_at = at or datetime.now(tz=timezone.utc)
+    if blocker_details_json is not None:
+        task.blocker_details_json = blocker_details_json
+
+
+def record_task_slip(
+    task: Task,
+    *,
+    reason: str | None = None,
+    at: datetime | None = None,
+    next_step: str | None = None,
+    escalation_level: int | None = None,
+) -> None:
+    now = at or datetime.now(tz=timezone.utc)
+    task.slip_count += 1
+    task.last_slipped_at = now
+    task.last_slip_reason = reason
+    if next_step is not None:
+        task.next_step = next_step
+    if escalation_level is not None:
+        task.reminder_escalation_level = escalation_level
+
+
+def update_task_reminder_state(
+    task: Task,
+    *,
+    escalation_level: int | None = None,
+    last_reminder_at: datetime | None = None,
+    reminder_pause_until: datetime | None = None,
+) -> None:
+    if escalation_level is not None:
+        task.reminder_escalation_level = escalation_level
+    if last_reminder_at is not None:
+        task.last_reminder_at = last_reminder_at
+    if reminder_pause_until is not None:
+        task.reminder_pause_until = reminder_pause_until
+
+
+def create_task_dependency(
+    session: Session,
+    *,
+    user_id: uuid.UUID,
+    predecessor_task_id: uuid.UUID,
+    successor_task_id: uuid.UUID,
+    dependency_type: str = "finish_to_start",
+    metadata_json: dict | None = None,
+) -> TaskDependency:
+    dependency = TaskDependency(
+        user_id=user_id,
+        predecessor_task_id=predecessor_task_id,
+        successor_task_id=successor_task_id,
+        dependency_type=dependency_type,
+        metadata_json=metadata_json or {},
+    )
+    session.add(dependency)
+    session.flush()
+    return dependency
 
 
 def create_reminder(
@@ -92,6 +214,8 @@ def create_reminder(
     scheduled_for: datetime,
     kind: str = "checkin",
     escalation_level: int = 0,
+    attempt_count: int = 0,
+    cooldown_until: datetime | None = None,
     reason: str | None = None,
     payload: dict | None = None,
 ) -> Reminder:
@@ -101,11 +225,19 @@ def create_reminder(
         kind=kind,
         scheduled_for=scheduled_for,
         escalation_level=escalation_level,
+        attempt_count=attempt_count,
+        cooldown_until=cooldown_until,
         reason=reason,
         payload=payload or {},
     )
     session.add(reminder)
     session.flush()
+    if task_id is not None:
+        task = session.get(Task, task_id)
+        if task is not None:
+            task.reminder_escalation_level = max(task.reminder_escalation_level, escalation_level)
+            if cooldown_until is not None:
+                task.reminder_pause_until = cooldown_until
     return reminder
 
 

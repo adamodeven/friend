@@ -95,6 +95,22 @@ def test_high_confidence_add_task_still_attempts_llm_before_fallback():
     assert adapter.json_calls >= 1
 
 
+def test_extract_multitask_message_splits_plain_and_connector_into_two_tasks():
+    adapter = _CountingAdapter()
+    extractor = IntentExtractor(adapter=adapter)
+    result = extractor.extract("finish cad tonight and submit app tomorrow morning", "America/New_York")
+    assert result.intent == "add_task"
+    assert len(result.tasks) == 2
+    assert "finish cad" in result.tasks[0].title.lower()
+    assert result.tasks[0].deadline_text == "tonight"
+    assert result.tasks[0].deadline is not None
+    assert result.tasks[0].deadline.granularity == "part_of_day"
+    assert "submit app" in result.tasks[1].title.lower()
+    assert result.tasks[1].deadline_text == "tomorrow morning"
+    assert result.tasks[1].deadline is not None
+    assert adapter.json_calls >= 1
+
+
 def test_simple_single_task_short_circuits_llm_for_latency():
     adapter = _CountingAdapter()
     extractor = IntentExtractor(adapter=adapter)
@@ -164,6 +180,74 @@ def test_ambiguous_time_sets_clarification_hint():
     assert result.time_reference is not None
     assert result.time_confidence <= 0.6
     assert result.needs_clarification is True
+    assert result.task is not None
+    assert result.task.deadline is not None
+    assert result.task.deadline.deadline_at is None
+    assert result.task.deadline.soft_deadline_at is not None
+    assert result.task.deadline.is_ambiguous is True
+
+
+def test_weekend_time_stays_ambiguous_without_forcing_clarification():
+    adapter = _CountingAdapter()
+    extractor = IntentExtractor(adapter=adapter)
+    result = extractor.extract("need to outline the concept this weekend", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert result.task.deadline is not None
+    assert result.task.deadline.is_ambiguous is True
+    assert result.task.deadline.granularity == "weekend"
+    assert result.needs_clarification is False
+
+
+def test_before_studio_without_anchor_stays_soft_and_ambiguous():
+    adapter = _CountingAdapter()
+    extractor = IntentExtractor(adapter=adapter)
+    result = extractor.extract("need to print boards before studio", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert result.task.deadline is not None
+    assert result.task.deadline.deadline_at is None
+    assert result.task.deadline.soft_deadline_at is not None
+    assert result.task.deadline.is_ambiguous is True
+
+
+def test_llm_tasks_array_gets_sanitized_and_deadlines_hydrated():
+    payload = {
+        "intent": "add_task",
+        "confidence": 0.78,
+        "tasks": [
+            {
+                "title": "finish cad tonight",
+                "description": None,
+                "project": None,
+                "deadline_text": "tonight",
+                "priority": 2,
+                "confidence": 0.7,
+                "next_step": None,
+            },
+            {
+                "title": "submit app later",
+                "description": None,
+                "project": None,
+                "deadline_text": "later",
+                "priority": 2,
+                "confidence": 0.6,
+                "next_step": None,
+            },
+        ],
+    }
+    adapter = _PayloadAdapter(payload)
+    extractor = IntentExtractor(adapter=adapter)
+    result = extractor.extract("finish cad tonight and submit app later", "America/New_York")
+    assert result.intent == "add_task"
+    assert len(result.tasks) == 2
+    assert result.tasks[0].title.lower() == "finish cad"
+    assert result.tasks[0].deadline is not None
+    assert result.tasks[0].deadline.deadline_at is not None
+    assert result.tasks[1].title.lower() == "submit app"
+    assert result.tasks[1].deadline is not None
+    assert result.tasks[1].deadline.soft_deadline_at is not None
+    assert result.tasks[1].deadline.is_ambiguous is True
 
 
 def test_timeline_query_fallback_wins_over_bad_llm_add_task_guess():

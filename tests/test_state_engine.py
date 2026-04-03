@@ -219,6 +219,29 @@ def test_timeline_query_tomorrow_morning_routes_to_specific_window(db_session):
     assert any("tomorrow morning" in fact.lower() for fact in outcome.key_facts_to_include)
 
 
+def test_project_plan_query_returns_project_view_without_creating_task(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    create_task(db_session, user_id=user.id, title="Finish the CAD for the enclosure", priority=5)
+    create_task(db_session, user_id=user.id, title="Send enclosure update email", priority=4)
+    db_session.commit()
+
+    engine = StateEngine()
+    intent = IntentResult(intent="timeline_query", confidence=0.9)
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="what's the plan for the enclosure project?",
+    )
+
+    assert outcome.response_goal == "timeline_summary"
+    summary = " ".join(outcome.key_facts_to_include).lower()
+    assert "enclosure plan" in summary
+    assert "finish the cad for the enclosure" in summary
+    assert "captured:" not in summary
+
+
 def test_update_task_blocker_creates_prerequisite_and_dependency(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None
@@ -254,6 +277,79 @@ def test_update_task_blocker_creates_prerequisite_and_dependency(db_session):
     assert outcome.response_goal == "replan_blocker"
     assert outcome.should_ask_question is False
     assert "fix website" in (outcome.suggested_next_step or "").lower()
+
+
+def test_archive_task_action_really_archives_task_and_skips_reminders(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    task = create_task(db_session, user_id=user.id, title="Fix website", priority=4)
+    blocked = create_task(
+        db_session,
+        user_id=user.id,
+        title="Send recruiter email",
+        priority=5,
+        blocked_reason="need website fixed first",
+        blocked_at=datetime.now(tz=ZoneInfo(user.timezone)),
+    )
+    blocked.status = TaskStatus.blocked
+    create_task_dependency(
+        db_session,
+        user_id=user.id,
+        predecessor_task_id=task.id,
+        successor_task_id=blocked.id,
+    )
+    db_session.add(
+        Reminder(
+            user_id=user.id,
+            task_id=task.id,
+            status=ReminderStatus.pending,
+            scheduled_for=datetime.now(tz=ZoneInfo(user.timezone)),
+        )
+    )
+    db_session.commit()
+
+    engine = StateEngine()
+    intent = IntentResult(intent="update_task", confidence=0.95, task_updates={"action": "archive"})
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="delete the website task",
+    )
+    db_session.commit()
+
+    refreshed_task = db_session.get(Task, task.id)
+    refreshed_blocked = db_session.get(Task, blocked.id)
+    reminder = db_session.execute(select(Reminder).where(Reminder.task_id == task.id)).scalars().one()
+
+    assert refreshed_task is not None
+    assert refreshed_task.status == TaskStatus.archived
+    assert refreshed_blocked is not None
+    assert refreshed_blocked.status == TaskStatus.active
+    assert reminder.status == ReminderStatus.skipped
+    assert any(fact == "archived task: Fix website" for fact in outcome.key_facts_to_include)
+    assert outcome.should_ask_question is False
+
+
+def test_update_task_without_concrete_change_asks_clarifier_instead_of_bluffing(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    create_task(db_session, user_id=user.id, title="Finish CAD", priority=5)
+    db_session.commit()
+
+    engine = StateEngine()
+    intent = IntentResult(intent="update_task", confidence=0.8)
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="about the cad task",
+    )
+
+    assert outcome.response_goal == "confirm_update"
+    assert outcome.should_ask_question is True
+    assert outcome.question_if_needed is not None
+    assert "what do you want me to change" in outcome.question_if_needed.lower()
 
 
 def test_complete_task_unblocks_successor_and_surfaces_next_action(db_session):

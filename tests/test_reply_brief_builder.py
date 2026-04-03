@@ -159,3 +159,26 @@ def test_reply_brief_uses_style_profile_chunk_limits(db_session):
     assert brief.style_mode == "direct"
     assert brief.max_chunk_length == 260
     assert brief.max_chunks == 2
+
+
+def test_ingestion_confirmation_clears_unrelated_task_context(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    db_session.add(Task(user_id=user.id, title="Fix website", status=TaskStatus.active, priority=5))
+    db_session.commit()
+
+    builder = ReplyBriefBuilder()
+    brief = builder.build(
+        db_session,
+        user=user,
+        latest_user_message="here's the assignment screenshot",
+        outcome=StateOutcome(
+            response_goal="ingestion_confirmation",
+            key_facts_to_include=["screenshot saved, but the concrete task pull was low-confidence"],
+            should_ask_question=True,
+            question_if_needed="what should i pull out from that screenshot?",
+        ),
+    )
+
+    assert brief.active_task_context == []
+    assert brief.deadline_context == []

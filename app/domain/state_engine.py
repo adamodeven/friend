@@ -172,7 +172,9 @@ class StateEngine:
             outcome.mention_deadline = True
             outcome.emotional_tone = "direct"
             lowered = raw_text.lower()
-            if "weekend" in lowered:
+            if "plan for" in lowered:
+                summary = self.timeline.build_project_view(session, user.id, user.timezone, raw_text)
+            elif "weekend" in lowered:
                 summary = self.timeline.build_weekend_view(session, user.id, user.timezone)
             elif "tomorrow morning" in lowered:
                 summary = self.timeline.build_tomorrow_morning_view(session, user.id, user.timezone)
@@ -238,6 +240,7 @@ class StateEngine:
 
         elif intent.intent == "update_task":
             bulk_action = str(intent.task_updates.get("bulk_action", "")).strip().lower()
+            action = str(intent.task_updates.get("action", "")).strip().lower()
             if bulk_action == "clear_active_tasks":
                 archived_count = self._clear_active_tasks(session, user.id)
                 outcome.response_goal = "confirm_update"
@@ -252,6 +255,14 @@ class StateEngine:
                 outcome.response_goal = "confirm_update"
                 outcome.emotional_tone = "direct"
                 if matched:
+                    applied_change = False
+                    if action == "archive":
+                        archived_count = self._archive_task_and_skip_pending_reminders(session, matched)
+                        session.flush()
+                        outcome.key_facts_to_include.append(f"archived task: {matched.title}")
+                        if archived_count > 1:
+                            outcome.key_facts_to_include.append(f"also archived {archived_count - 1} linked subtasks")
+                        applied_change = True
                     if intent.time_reference:
                         parsed, conf = parse_human_time(intent.time_reference, timezone=user.timezone)
                         if parsed:
@@ -263,6 +274,7 @@ class StateEngine:
                                 f"deadline updated for {matched.title} -> {parsed.astimezone(ZoneInfo(user.timezone)).strftime('%a %-m/%-d %-I:%M%p').lower()}"
                             )
                             outcome.mention_deadline = True
+                            applied_change = True
                     if intent.task_updates.get("status") == "blocked" or intent.blockers:
                         blocker_texts = intent.blockers or [raw_text]
                         resolved = self._apply_blockers_to_task(
@@ -277,6 +289,7 @@ class StateEngine:
                         outcome.key_facts_to_include.append(f"task blocked: {matched.title}")
                         outcome.mention_dependency = True
                         outcome.response_goal = "replan_blocker"
+                        applied_change = True
                         if resolved:
                             outcome.key_facts_to_include.append(f"blocked by {resolved[0].title}")
                             outcome.suggested_next_step = self._next_step_for_task(resolved[0])
@@ -284,7 +297,13 @@ class StateEngine:
                         else:
                             outcome.should_ask_question = True
                             outcome.question_if_needed = self._blocker_followup_question(matched.title)
-                    self.reminders.schedule_for_task(session, matched)
+                    if not applied_change:
+                        outcome.key_facts_to_include.append(f"matched task: {matched.title}")
+                        outcome.should_push_for_action = False
+                        outcome.should_ask_question = True
+                        outcome.question_if_needed = f"what do you want me to change on '{matched.title}'?"
+                    elif action != "archive":
+                        self.reminders.schedule_for_task(session, matched)
                 else:
                     if intent.blockers:
                         outcome.response_goal = "replan_blocker"
@@ -292,6 +311,10 @@ class StateEngine:
                         outcome.key_facts_to_include.append(f"blocker: {intent.blockers[0]}")
                         outcome.should_ask_question = True
                         outcome.question_if_needed = "which task is blocked by that?"
+                    elif action == "archive":
+                        outcome.key_facts_to_include.append("drop request noted, but task match was uncertain")
+                        outcome.should_ask_question = True
+                        outcome.question_if_needed = "which task do you want me to drop exactly?"
                     else:
                         outcome.key_facts_to_include.append("update noted, but task match was uncertain")
                         outcome.should_ask_question = True
@@ -723,6 +746,89 @@ class StateEngine:
                 reminder.last_error = "skipped due to bulk clear action"
         return len(tasks)
 
+    def _archive_task_and_skip_pending_reminders(self, session: Session, task: Task) -> int:
+        subtree = self._task_subtree(task)
+        task_ids = [node.id for node in subtree]
+
+        reminders = (
+            session.execute(
+                select(Reminder).where(
+                    Reminder.user_id == task.user_id,
+                    Reminder.task_id.in_(task_ids),
+                    Reminder.status == ReminderStatus.pending,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for reminder in reminders:
+            reminder.status = ReminderStatus.skipped
+            reminder.last_error = "skipped due to archive action"
+
+        dependency_links = (
+            session.execute(
+                select(TaskDependency).where(
+                    TaskDependency.user_id == task.user_id,
+                    (TaskDependency.predecessor_task_id.in_(task_ids)) | (TaskDependency.successor_task_id.in_(task_ids)),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        successor_ids = {
+            link.successor_task_id
+            for link in dependency_links
+            if link.predecessor_task_id in task_ids and link.successor_task_id not in task_ids
+        }
+        for link in dependency_links:
+            session.delete(link)
+
+        for node in subtree:
+            node.status = TaskStatus.archived
+            node.blocked_reason = None
+            node.blocked_at = None
+            node.reminder_pause_until = None
+            details = dict(node.blocker_details_json or {})
+            details.pop("dependency_titles", None)
+            details.pop("dependency_task_ids", None)
+            node.blocker_details_json = details
+
+        session.flush()
+        for successor_id in successor_ids:
+            successor = session.get(Task, successor_id)
+            if successor is not None:
+                session.expire(successor, ["successor_links"])
+                unresolved = [
+                    link.predecessor_task
+                    for link in successor.successor_links
+                    if link.predecessor_task.status != TaskStatus.completed
+                ]
+                if unresolved:
+                    self._refresh_task_block_state(successor)
+                else:
+                    successor.status = TaskStatus.active
+                    successor.blocked_reason = None
+                    successor.blocked_at = None
+                    details = dict(successor.blocker_details_json or {})
+                    details.pop("dependency_titles", None)
+                    details.pop("dependency_task_ids", None)
+                    successor.blocker_details_json = details
+        return len(subtree)
+
+    @staticmethod
+    def _task_subtree(task: Task) -> list[Task]:
+        nodes: list[Task] = []
+        stack = [task]
+        seen = set()
+        while stack:
+            current = stack.pop()
+            if current.id in seen:
+                continue
+            seen.add(current.id)
+            nodes.append(current)
+            stack.extend(current.subtasks)
+        return nodes
+
     @staticmethod
     def _normalize_context_type(text: str) -> str:
         lowered = text.lower()
@@ -832,7 +938,7 @@ class StateEngine:
         if best is not None and best_score >= 6:
             return best
 
-        pieces = [segment.strip() for segment in re.findall(r"[a-z0-9]+", lowered) if len(segment.strip()) > 3]
+        pieces = [segment.strip() for segment in re.findall(r"[a-z0-9]+", lowered) if len(segment.strip()) > 2]
         for piece in pieces[:8]:
             found = find_active_task_by_title(session, user_id, piece)
             if found:

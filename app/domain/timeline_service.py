@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import re
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -68,6 +69,39 @@ class TimelineService:
         if not filtered:
             return "weekend is clear in the system right now."
         return self._render_plan("weekend plan", filtered[:5], timezone)
+
+    def build_project_view(self, session: Session, user_id, timezone: str, raw_text: str) -> str:
+        ranked = self._ranked_tasks(session, user_id, timezone, horizon=datetime.now(tz=ZoneInfo(timezone)) + timedelta(days=14))
+        project_phrase = self._project_phrase(raw_text)
+        query_tokens = self._project_query_tokens(project_phrase)
+        if not ranked or not query_tokens:
+            label = project_phrase or "that project"
+            return f"i'm not tracking a clear plan for {label} yet."
+
+        matches: list[tuple[int, RankedTask]] = []
+        for rank in ranked:
+            haystacks = [rank.task.title.lower()]
+            if rank.task.project is not None and rank.task.project.title:
+                haystacks.append(rank.task.project.title.lower())
+            token_hits = sum(1 for token in query_tokens if any(token in haystack for haystack in haystacks))
+            if token_hits:
+                matches.append((token_hits, rank))
+
+        if not matches:
+            return f"i'm not tracking a clear plan for {project_phrase} yet."
+
+        matches.sort(
+            key=lambda item: (
+                -item[0],
+                -item[1].score,
+                0 if item[1].actionable else 1,
+                item[1].due_at or datetime.max.replace(tzinfo=ZoneInfo(timezone)),
+            )
+        )
+        label = re.sub(r"^(the|my|a|an)\s+", "", project_phrase, flags=re.IGNORECASE)
+        label = re.sub(r"\s+project$", "", label, flags=re.IGNORECASE)
+        label = label[:60].strip() or "project"
+        return self._render_plan(f"{label} plan", [rank for _, rank in matches[:5]], timezone)
 
     def next_hour_recommendation(self, session: Session, user_id, timezone: str) -> str:
         ranked = self._ranked_tasks(session, user_id, timezone, horizon=datetime.now(tz=ZoneInfo(timezone)) + timedelta(hours=8))
@@ -158,10 +192,16 @@ class TimelineService:
             unlock_titles: list[str] = []
             for successor in unlocks:
                 unlock_titles.append(successor.title)
-                unlock_bonus += 120
+                unlock_bonus += 180
                 successor_due = self._ensure_tz(successor.deadline_at, now.tzinfo) if successor.deadline_at else None
-                if successor_due is not None and successor_due <= horizon:
-                    unlock_bonus += 140
+                if successor_due is not None:
+                    successor_delta = successor_due - now
+                    if successor_delta <= timedelta(hours=8):
+                        unlock_bonus += 180
+                    elif successor_delta <= timedelta(days=1):
+                        unlock_bonus += 120
+                    elif successor_due <= horizon:
+                        unlock_bonus += 80
             score += unlock_bonus
 
             if active_subtask_count[task.id] > 0:
@@ -240,3 +280,20 @@ class TimelineService:
     @staticmethod
     def _default_move_text(task_title: str) -> str:
         return f"make a concrete dent in {task_title}"
+
+    @staticmethod
+    def _project_phrase(raw_text: str) -> str:
+        stripped = raw_text.strip()
+        match = re.search(r"plan for\s+(.+?)(?:\?|$)", stripped, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip(" .?!,'\"")
+        return stripped.strip(" .?!,'\"")
+
+    @staticmethod
+    def _project_query_tokens(project_phrase: str) -> list[str]:
+        stopwords = {"the", "my", "for", "and", "project", "plan", "what", "whats", "what's"}
+        return [
+            token
+            for token in re.findall(r"[a-z0-9]+", project_phrase.lower())
+            if len(token) > 2 and token not in stopwords
+        ]

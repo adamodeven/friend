@@ -147,3 +147,19 @@ def test_weekend_view_handles_empty_case(db_session):
     service = TimelineService()
     text = service.build_weekend_view(db_session, user.id, user.timezone)
     assert "weekend is clear" in text.lower()
+
+
+def test_project_view_filters_to_matching_tasks(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    create_task(db_session, user_id=user.id, title="Finish the CAD for the enclosure", priority=5)
+    create_task(db_session, user_id=user.id, title="Send enclosure update email", priority=4)
+    create_task(db_session, user_id=user.id, title="Laundry", priority=1)
+    db_session.commit()
+
+    service = TimelineService()
+    text = service.build_project_view(db_session, user.id, user.timezone, "what's the plan for the enclosure project?")
+    lowered = text.lower()
+    assert "enclosure plan" in lowered
+    assert "finish the cad for the enclosure" in lowered
+    assert "laundry" not in lowered

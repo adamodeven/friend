@@ -173,6 +173,41 @@ def test_bulk_clear_task_language_maps_to_update_bulk_action():
     assert result.task_updates.get("bulk_action") == "clear_active_tasks"
 
 
+def test_project_plan_query_routes_to_timeline_query_not_task_add():
+    extractor = IntentExtractor()
+    result = extractor.extract("what's the plan for the enclosure project?", "America/New_York")
+    assert result.intent == "timeline_query"
+    assert result.task is None
+    assert result.tasks == []
+
+
+def test_attachment_reference_message_does_not_create_task():
+    extractor = IntentExtractor()
+    result = extractor.extract("here's the assignment screenshot", "America/New_York")
+    assert result.intent == "general_chat"
+    assert result.task is None
+    assert result.tasks == []
+
+
+def test_delete_task_language_maps_to_archive_update_action():
+    extractor = IntentExtractor()
+    result = extractor.extract("delete the website task", "America/New_York")
+    assert result.intent == "update_task"
+    assert result.task_updates.get("action") == "archive"
+
+
+def test_fallback_multitask_split_keeps_clean_titles_with_trailing_preposition_removed():
+    extractor = IntentExtractor()
+    result = extractor.extract(
+        "yo i need to finish the CAD for the enclosure by tomorrow night and send that email tomorrow morning",
+        "America/New_York",
+    )
+    assert result.intent == "add_task"
+    assert len(result.tasks) == 2
+    assert result.tasks[0].title.lower() == "finish the cad for the enclosure"
+    assert result.tasks[1].title.lower() == "send that email"
+
+
 def test_ambiguous_time_sets_clarification_hint():
     extractor = IntentExtractor()
     result = extractor.extract("need to send that email later", "America/New_York")

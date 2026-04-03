@@ -13,7 +13,7 @@ class IntentExtractor:
     _TASK_START_PATTERN = (
         r"(?:i\s+)?(?:need to|have to|gotta|must|should|want to|submit|finish|send|write|prepare|study|"
         r"review|fix|build|make|do|call|email|text|update|work on|start|complete|wrap|clean|buy|plan|"
-        r"schedule|reply|apply|pay|draft|upload|design|model)"
+        r"schedule|reply|apply|pay|draft|upload|design|model|export|print)"
     )
 
     def __init__(self, adapter: OllamaAdapter | None = None) -> None:
@@ -85,6 +85,20 @@ class IntentExtractor:
 
     def _extract_fallback(self, text: str, timezone: str) -> IntentResult:
         lowered = text.lower().strip()
+        if self._is_attachment_reference_message(lowered):
+            return IntentResult(
+                intent="general_chat",
+                confidence=0.82,
+                summary="attachment reference message",
+            )
+
+        if self._is_project_plan_query(lowered):
+            return IntentResult(
+                intent="timeline_query",
+                confidence=0.88,
+                summary="project-specific plan requested",
+            )
+
         bulk_action = self._detect_bulk_action(lowered)
         if bulk_action:
             return IntentResult(
@@ -93,11 +107,20 @@ class IntentExtractor:
                 summary="bulk task list action requested",
                 task_updates={"bulk_action": bulk_action},
             )
+        update_action = self._detect_update_action(lowered)
+        if update_action:
+            return IntentResult(
+                intent="update_task",
+                confidence=0.9,
+                summary=f"task update action requested: {update_action}",
+                task_updates={"action": update_action},
+            )
         timeline_query_cues = [
             "what do i have",
             "what's due",
             "what do i need to get done",
             "deadlines",
+            "plan for",
             "today",
             "this week",
             "tonight",
@@ -308,7 +331,9 @@ class IntentExtractor:
         cleaned = (title or "").lower().strip()
         cleaned = cleaned.replace("\n", " ")
         cleaned = re.sub(r"^[\"'`]+|[\"'`]+$", "", cleaned)
+        cleaned = re.sub(r"^(yo|hey|ok|okay|alright|also|plus)\s+", "", cleaned)
         cleaned = re.sub(r"^(and then|and|then)\s+", "", cleaned)
+        cleaned = re.sub(r"^(i\s+)?(also\s+)?(need to|have to|gotta|want to|should|must)\s+", "", cleaned)
         cleaned = re.sub(r"^(i\s+(need to|have to|gotta|want to|should|must)\s+)", "", cleaned)
         cleaned = re.sub(r"^(need to|have to|gotta|want to|should|must)\s+", "", cleaned)
         cleaned = re.sub(r"^i\s+", "", cleaned)
@@ -318,6 +343,8 @@ class IntentExtractor:
             cleaned,
         )
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.-")
+        while re.search(r"\b(by|before|after|for|to|at|on|with)$", cleaned):
+            cleaned = re.sub(r"\b(by|before|after|for|to|at|on|with)$", "", cleaned).strip(" ,.-")
         if len(cleaned) > 90:
             cleaned = cleaned[:90].rsplit(" ", 1)[0]
         if not cleaned:
@@ -484,11 +511,11 @@ class IntentExtractor:
             return False
         if re.search(rf"^(?:yo|hey|ok|okay|alright|and\s+then|then\s+)?{self._TASK_START_PATTERN}\b", text):
             return True
-        if "assignment" in text or "project" in text:
+        if re.search(r"\b(?:got|have|new|another|dropped)\s+(?:an?\s+)?assignment\b", text):
             return True
         deadline_text = self._extract_deadline_phrase(text)
         return deadline_text is not None and bool(
-            re.search(r"\b(submit|finish|send|prepare|fix|study|write|review|apply|upload|pay|draft|reply|complete)\b", text),
+            re.search(r"\b(submit|finish|send|prepare|fix|study|write|review|apply|upload|pay|draft|reply|complete|export|print)\b", text),
         )
 
     @staticmethod
@@ -536,7 +563,11 @@ class IntentExtractor:
             return True
 
         lowered = text.lower().strip()
+        if fallback.intent == "update_task" and fallback.task_updates.get("action") in {"archive", "delete"}:
+            return True
         if fallback.intent in {"context_signal", "timeline_query", "status_query"} and fallback.confidence >= 0.82:
+            return True
+        if fallback.intent == "general_chat" and fallback.confidence >= 0.8 and self._is_attachment_reference_message(lowered):
             return True
         if (
             fallback.intent == "add_task"
@@ -602,6 +633,31 @@ class IntentExtractor:
             if re.search(pattern, text):
                 return "clear_active_tasks"
         return None
+
+    @staticmethod
+    def _detect_update_action(text: str) -> str | None:
+        if re.search(r"\b(delete|remove|drop|archive)\b.*\b(task|todo|to-do)?\b", text):
+            return "archive"
+        return None
+
+    @staticmethod
+    def _is_attachment_reference_message(text: str) -> bool:
+        if not any(token in text for token in ("screenshot", "picture", "image", "photo")):
+            return False
+        if re.search(rf"\b{IntentExtractor._TASK_START_PATTERN}\b", text):
+            return False
+        lead_patterns = (
+            r"^(here(?:'|’)s|heres)\b",
+            r"^(look at|see)\b",
+            r"^(this is|this was|that was)\b",
+        )
+        return any(re.search(pattern, text) for pattern in lead_patterns)
+
+    @staticmethod
+    def _is_project_plan_query(text: str) -> bool:
+        if "?" in text and "plan for" in text:
+            return True
+        return bool(re.search(r"\bwhat(?:'s| is)\s+the\s+plan\s+for\b", text))
 
 
 class ImageAssignmentExtractor:

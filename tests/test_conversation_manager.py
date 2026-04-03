@@ -4,6 +4,7 @@ import pytest
 from app.db.models import Attachment, ConversationMessage, ExtractedArtifact, JobStatus, MessageDirection, ProcessingJob, Reminder, Task, User
 from app.db.repositories.task_repo import create_task
 from app.domain.conversation_manager import ConversationManager
+from app.ingestion.attachments import AttachmentIngestionService
 from app.schemas.reply import ComposedReply
 from app.schemas.intent import IntentResult
 from app.schemas.transport import InboundMedia
@@ -214,3 +215,12 @@ def test_processing_job_marked_failed_when_pipeline_raises(db_session):
     )
     assert latest_job is not None
     assert latest_job.status == JobStatus.failed
+
+
+def test_attachment_ingestion_bounds_long_artifact_text():
+    service = AttachmentIngestionService()
+    bounded = service._bounded_artifact_text("x" * 400)
+
+    assert bounded is not None
+    assert len(bounded) == 255
+    assert bounded.endswith("…")

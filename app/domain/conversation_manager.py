@@ -164,13 +164,15 @@ class ConversationManager:
     def _ingest_attachments(self, session: Session, *, attachments: list[Attachment], user) -> AttachmentEffects:
         effects = AttachmentEffects()
         for attachment in attachments:
+            attachment_id = attachment.id
             try:
-                self.attachment_service.download_attachment(attachment)
-                artifact, task = self.attachment_service.process_assignment_image(
-                    session,
-                    attachment=attachment,
-                    timezone=user.timezone,
-                )
+                with session.begin_nested():
+                    self.attachment_service.download_attachment(attachment)
+                    artifact, task = self.attachment_service.process_assignment_image(
+                        session,
+                        attachment=attachment,
+                        timezone=user.timezone,
+                    )
                 effects.processed_count += 1
                 if task is not None:
                     if task.user is None:
@@ -188,7 +190,7 @@ class ConversationManager:
                 attachment.status = "failed"
                 attachment.analysis = {"error": str(exc)}
                 effects.failed_count += 1
-                logger.exception("attachment ingestion failed attachment_id=%s", attachment.id)
+                logger.exception("attachment ingestion failed attachment_id=%s", attachment_id)
         return effects
 
     def _merge_attachment_effects(

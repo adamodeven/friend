@@ -14,6 +14,8 @@ from app.llm.extraction import ImageAssignmentExtractor
 
 
 class AttachmentIngestionService:
+    _ARTIFACT_TEXT_LIMIT = 255
+
     def __init__(self) -> None:
         self.settings = get_settings()
         self.extractor = ImageAssignmentExtractor()
@@ -79,8 +81,8 @@ class AttachmentIngestionService:
         artifact = ExtractedArtifact(
             user_id=attachment.user_id,
             source_attachment_id=attachment.id,
-            title=result.title,
-            context=result.context,
+            title=self._bounded_artifact_text(result.title),
+            context=self._bounded_artifact_text(result.context),
             due_at=result.due_at,
             raw_text=result.raw_text,
             structured_data={
@@ -216,6 +218,17 @@ class AttachmentIngestionService:
         if lowered.startswith(("send ", "email ", "text ", "upload ", "export ", "finish ", "review ", "fix ")):
             return title
         return f"start a focused first pass on {title}"
+
+    @classmethod
+    def _bounded_artifact_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = " ".join(value.split()).strip()
+        if not cleaned:
+            return None
+        if len(cleaned) <= cls._ARTIFACT_TEXT_LIMIT:
+            return cleaned
+        return cleaned[: cls._ARTIFACT_TEXT_LIMIT - 1].rstrip() + "…"
 
     @staticmethod
     def _priority_for_task(*, due_at, due_text: str | None, confidence: float) -> int:  # noqa: ANN001

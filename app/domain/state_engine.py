@@ -100,18 +100,29 @@ class StateEngine:
                 outcome.key_facts_to_include.append(f"linked {bundle.dependency_count} dependency threads")
             if bundle.created_prerequisites:
                 outcome.key_facts_to_include.append(f"real blocker looks like {bundle.created_prerequisites[0].title}")
-            if bundle.deadline_tasks:
+            actionable_deadline_tasks = [
+                task
+                for task in bundle.deadline_tasks
+                if task.deadline_at is not None
+                and (
+                    task.start_after is None
+                    or self._normalize_dt(task.start_after, user.timezone) <= datetime.now(tz=ZoneInfo(user.timezone))
+                )
+            ]
+            if actionable_deadline_tasks:
                 earliest = min(
-                    bundle.deadline_tasks,
+                    actionable_deadline_tasks,
                     key=lambda task: self._normalize_dt(task.deadline_at, user.timezone) or datetime.max.replace(tzinfo=ZoneInfo(user.timezone)),
                 )
                 due_text = self._format_due(earliest.deadline_at, user.timezone)
                 if due_text:
-                    outcome.key_facts_to_include.append(f"closest deadline is {due_text}")
+                    outcome.key_facts_to_include.append(f"deadline coming up {due_text}")
                 outcome.mention_deadline = True
                 if earliest.deadline_at is not None:
                     outcome.urgency_level = self._urgency_from_deadline(earliest.deadline_at, user.timezone)
-            if bundle.reminder_count and len(bundle.root_tasks) == 1:
+            elif bundle.deadline_tasks:
+                outcome.mention_deadline = True
+            if bundle.reminder_count and len(bundle.root_tasks) == 1 and not intent.context_signal:
                 task = bundle.root_tasks[0]
                 pending = self._next_pending_reminder_for_task(session, task.id)
                 if pending:
@@ -124,8 +135,10 @@ class StateEngine:
 
             if intent.context_signal:
                 block = self._record_context_block(session, user=user, raw_text=intent.context_signal, confidence=intent.confidence)
-                outcome.key_facts_to_include.append(f"you're busy with {block.block_type.replace('_', ' ')} till {block.ends_at.astimezone(ZoneInfo(user.timezone)).strftime('%-I:%M%p').lower()}")
+                context_label = self._context_ack_text(block.block_type)
+                outcome.key_facts_to_include.append(context_label)
                 outcome.should_push_for_action = False
+                outcome.suggested_next_step = None
             needs_post_context_followup = intent.context_signal and self._looks_like_placeholder_assignment(bundle.root_tasks)
 
             if bundle.ambiguous_deadline_task and bundle.ambiguous_time_reference:
@@ -201,10 +214,8 @@ class StateEngine:
             block = self._record_context_block(session, user=user, raw_text=intent.context_signal or raw_text, confidence=intent.confidence)
             outcome.response_goal = "acknowledge_context"
             outcome.emotional_tone = "calm"
-            outcome.key_facts_to_include.append(f"got it, you're tied up with {block.block_type.replace('_', ' ')}")
-            outcome.key_facts_to_include.append(
-                f"i'll back off till {block.ends_at.astimezone(ZoneInfo(user.timezone)).strftime('%-I:%M%p').lower()}"
-            )
+            outcome.key_facts_to_include.append(self._context_ack_text(block.block_type))
+            outcome.key_facts_to_include.append("i'm backing off for now")
             outcome.avoid_topics.append("hard-pressure push while unavailable")
 
         elif intent.intent == "reflection":
@@ -428,7 +439,13 @@ class StateEngine:
         if needs_time_clarification and bundle.ambiguous_deadline_task is None and bundle.root_tasks:
             bundle.ambiguous_deadline_task = bundle.root_tasks[0]
             bundle.ambiguous_time_reference = time_reference or "that time"
-        elif time_reference and time_confidence < 0.6 and bundle.root_tasks and bundle.ambiguous_deadline_task is None:
+        elif (
+            time_reference
+            and time_confidence < 0.6
+            and self._time_reference_needs_followup(time_reference)
+            and bundle.root_tasks
+            and bundle.ambiguous_deadline_task is None
+        ):
             bundle.ambiguous_deadline_task = bundle.root_tasks[0]
             bundle.ambiguous_time_reference = time_reference
 
@@ -890,6 +907,11 @@ class StateEngine:
         return f"quick clarify: for '{cleaned_task}', what exact time should i use for '{cleaned_ref}'?"
 
     @staticmethod
+    def _time_reference_needs_followup(time_reference: str) -> bool:
+        lowered = time_reference.lower().strip()
+        return any(token in lowered for token in ("after class", "before studio"))
+
+    @staticmethod
     def _blocker_followup_question(task_title: str) -> str:
         cleaned_task = task_title.strip()
         if len(cleaned_task) > 70:
@@ -1033,6 +1055,21 @@ class StateEngine:
             return False
         lowered = tasks[0].title.lower()
         return "new assignment" in lowered or "assignment from professor" in lowered
+
+    @staticmethod
+    def _context_ack_text(block_type: str) -> str:
+        normalized = block_type.replace("_", " ")
+        if block_type == "in_class":
+            return "got it, you're in class rn"
+        if block_type == "driving":
+            return "got it, you're driving rn"
+        if block_type == "social_event":
+            return "got it, you're tied up rn"
+        if block_type == "all_nighter":
+            return "got it, you're on an all-nighter rn"
+        if block_type == "sleeping":
+            return "got it, you're off for the night"
+        return f"got it, you're tied up with {normalized} rn"
 
     @staticmethod
     def _task_context(task: Task) -> ReplyTaskContext:

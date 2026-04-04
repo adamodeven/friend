@@ -208,13 +208,13 @@ def test_fallback_multitask_split_keeps_clean_titles_with_trailing_preposition_r
     assert result.tasks[1].title.lower() == "send that email"
 
 
-def test_ambiguous_time_sets_clarification_hint():
+def test_ambiguous_later_stays_soft_without_forcing_clarification():
     extractor = IntentExtractor()
     result = extractor.extract("need to send that email later", "America/New_York")
     assert result.intent == "add_task"
     assert result.time_reference is not None
     assert result.time_confidence <= 0.6
-    assert result.needs_clarification is True
+    assert result.needs_clarification is False
     assert result.task is not None
     assert result.task.deadline is not None
     assert result.task.deadline.deadline_at is None
@@ -241,7 +241,30 @@ def test_mixed_assignment_and_context_creates_placeholder_task_and_context_signa
     assert result.intent == "add_task"
     assert result.context_signal is not None
     assert result.task is not None
-    assert "assignment" in result.task.title.lower()
+    assert result.task.title == "New assignment from professor"
+
+
+def test_mixed_assignment_context_fallback_wins_over_literal_llm_task_title():
+    payload = {
+        "intent": "add_task",
+        "confidence": 0.78,
+        "task": {
+            "title": "prof just dropped another assignment and i'm in class rn",
+            "description": None,
+            "project": None,
+            "deadline_text": None,
+            "priority": 2,
+            "confidence": 0.6,
+            "next_step": None,
+        },
+        "context_signal": "in class rn",
+    }
+    adapter = _PayloadAdapter(payload)
+    extractor = IntentExtractor(adapter=adapter)
+    result = extractor.extract("prof just dropped another assignment and i'm in class rn", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert result.task.title == "New assignment from professor"
 
 
 def test_weekend_time_stays_ambiguous_without_forcing_clarification():

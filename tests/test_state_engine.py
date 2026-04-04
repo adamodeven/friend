@@ -113,8 +113,10 @@ def test_add_task_with_context_signal_captures_placeholder_and_backs_off(db_sess
     assert block is not None
     assert block.block_type == "in_class"
     assert outcome.should_push_for_action is False
+    assert outcome.suggested_next_step is None
     assert outcome.should_ask_question is True
     assert outcome.question_if_needed is not None
+    assert any("in class rn" in fact for fact in outcome.key_facts_to_include)
 
 
 def test_status_query_meta_gets_direct_explanation(db_session):
@@ -184,7 +186,7 @@ def test_default_next_step_does_not_repeat_submit_for_submit_titles():
     assert lowered.startswith("do a final proofread, then submit my scout job application")
 
 
-def test_add_task_with_ambiguous_time_requests_clarification(db_session):
+def test_add_task_with_later_time_keeps_it_soft_without_immediate_clarification(db_session):
     user = db_session.execute(select(User)).scalars().first()
     engine = StateEngine()
     intent = IntentResult(
@@ -192,14 +194,13 @@ def test_add_task_with_ambiguous_time_requests_clarification(db_session):
         confidence=0.9,
         time_reference="later",
         time_confidence=0.35,
-        needs_clarification=True,
+        needs_clarification=False,
         task=ExtractedTask(title="Send email update", deadline_text="later"),
     )
     outcome = engine.apply_intent(db_session, user=user, intent=intent, raw_text="need to send that email later")
     assert outcome.response_goal == "acknowledge_new_task"
-    assert outcome.should_ask_question is True
-    assert outcome.question_if_needed is not None
-    assert "clarify" in outcome.question_if_needed.lower()
+    assert outcome.should_ask_question is False
+    assert outcome.question_if_needed is None
 
 
 def test_bulk_clear_archives_active_tasks_and_pending_reminders(db_session):

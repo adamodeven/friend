@@ -154,7 +154,7 @@ class IntentExtractor:
         task: ExtractedTask | None = None
 
         if has_context_signal and (candidate_tasks or placeholder_assignment):
-            tasks = candidate_tasks or ([placeholder_assignment] if placeholder_assignment else [])
+            tasks = [placeholder_assignment] if placeholder_assignment else candidate_tasks
             primary = tasks[0] if tasks else None
             return IntentResult(
                 intent="add_task",
@@ -283,6 +283,17 @@ class IntentExtractor:
     @staticmethod
     def _prefer_fallback(*, fallback: IntentResult, llm_result: IntentResult) -> bool:
         if llm_result.confidence < 0.45 and fallback.confidence >= 0.75:
+            return True
+        if (
+            fallback.intent == "add_task"
+            and fallback.context_signal is not None
+            and fallback.task is not None
+            and fallback.task.title.lower() in {"new assignment", "new assignment from professor"}
+            and llm_result.intent == "add_task"
+            and llm_result.task is not None
+            and "assignment" in llm_result.task.title.lower()
+            and "class" in llm_result.task.title.lower()
+        ):
             return True
         if llm_result.intent == "general_chat" and fallback.intent in {"add_task", "timeline_query", "context_signal"} and fallback.confidence >= 0.78:
             return True
@@ -619,8 +630,8 @@ class IntentExtractor:
         if "this weekend" in phrase:
             return False
         if deadline.deadline_at is None:
-            return True
-        return any(token in phrase for token in ("later", "after class", "before studio"))
+            return any(token in phrase for token in ("after class", "before studio"))
+        return any(token in phrase for token in ("after class", "before studio"))
 
     @staticmethod
     def _is_meta_or_capability_query(text: str) -> bool:
@@ -665,6 +676,13 @@ class IntentExtractor:
             and fallback.task is not None
             and not fallback.needs_clarification
             and self._is_simple_single_task_message(lowered)
+        ):
+            return True
+        if (
+            fallback.intent == "add_task"
+            and fallback.context_signal is not None
+            and fallback.task is not None
+            and fallback.task.title.lower() in {"new assignment", "new assignment from professor"}
         ):
             return True
         if fallback.intent == "general_chat" and fallback.confidence >= 0.55 and self._is_simple_checkin(lowered):

@@ -38,6 +38,25 @@ def test_requirement_intent_matrix(message: str, expected_intent: str):
 
 
 @pytest.mark.parametrize(
+    "message",
+    [
+        "actually monday morning",
+        "actually do monday instead",
+        "nah make it monday morning",
+        "wait move that to monday morning",
+        "portfolio bullets can wait till friday",
+        "push that to friday night",
+    ],
+)
+def test_requirement_followup_timing_updates_are_classified_consistently(message: str):
+    extractor = IntentExtractor()
+    result = extractor.extract(message, "America/New_York")
+    assert result.intent == "update_task"
+    assert result.task_updates.get("action") == "reschedule"
+    assert result.time_reference
+
+
+@pytest.mark.parametrize(
     ("message", "expected_kind", "expects_prep"),
     [
         ("need to text my roommate tomorrow morning", "quick_message", False),

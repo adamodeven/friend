@@ -67,19 +67,18 @@ class ConversationComposer:
                 return self.chunker.chunk(
                     flattened,
                     max_chunk_length=brief.max_chunk_length,
-                    max_chunks=1,
+                    max_chunks=min(brief.max_chunks, 2),
                     soft_chunk_length=style_profile.soft_chunk_chars,
                 )
 
         if (
             brief.response_goal == "acknowledge_new_task"
-            and first_fact
-            and self._looks_like_reminder_confirm(brief, first_fact)
+            and self._is_quick_reminder_brief(brief, first_fact)
             and not brief.should_ask_question
             and not brief.should_push_for_action
         ):
             return self.chunker.chunk(
-                first_fact,
+                self._deterministic_reminder_ack(brief),
                 max_chunk_length=brief.max_chunk_length,
                 max_chunks=1,
                 soft_chunk_length=style_profile.soft_chunk_chars,
@@ -101,12 +100,23 @@ class ConversationComposer:
 
         if (
             brief.response_goal == "confirm_update"
-            and first_fact
-            and self._looks_like_timing_shift_reply(brief, first_fact)
+            and self._is_reschedule_brief(brief, first_fact)
             and not brief.should_ask_question
         ):
             return self.chunker.chunk(
-                first_fact,
+                self._deterministic_reschedule_ack(brief),
+                max_chunk_length=brief.max_chunk_length,
+                max_chunks=1,
+                soft_chunk_length=style_profile.soft_chunk_chars,
+            )
+
+        if (
+            brief.response_goal == "confirm_update"
+            and "action=archive" in (brief.operational_reason or "")
+            and not brief.should_ask_question
+        ):
+            return self.chunker.chunk(
+                self._deterministic_archive_ack(brief),
                 max_chunk_length=brief.max_chunk_length,
                 max_chunks=1,
                 soft_chunk_length=style_profile.soft_chunk_chars,
@@ -601,16 +611,16 @@ class ConversationComposer:
         if heading:
             if heading in {"today", "tonight", "this week", "weekend"}:
                 if len(compact_items) == 1:
-                    return f"{heading} i'd start with {compact_items[0]}."
+                    return f"{heading} i'd keep it on {compact_items[0]}."
                 if len(compact_items) == 2:
-                    return f"{heading} i'd start with {compact_items[0]}, then {compact_items[1]}."
+                    return f"{heading} i'd keep it on {compact_items[0]}. then {compact_items[1]}."
                 joined = ", ".join(compact_items[:-1]) + f", then {compact_items[-1]}"
-                return f"{heading} i'd start with {joined}."
+                return f"{heading} i'd keep it on {joined}."
             if cls._is_time_window_heading(heading):
                 if len(compact_items) == 1:
                     return f"{heading} it's just {compact_items[0]}."
                 if len(compact_items) == 2:
-                    return f"{heading} it's {compact_items[0]}, then {compact_items[1]}."
+                    return f"{heading} it's {compact_items[0]}. then {compact_items[1]}."
                 joined = ", ".join(compact_items[:-1]) + f", then {compact_items[-1]}"
                 return f"{heading} it's {joined}."
             if len(compact_items) == 1:
@@ -1140,6 +1150,10 @@ class ConversationComposer:
             )
         )
 
+    @classmethod
+    def _is_quick_reminder_brief(cls, brief: ReplyBrief, first_fact: str | None) -> bool:
+        return "mode=quick_reminder" in (brief.operational_reason or "") or cls._looks_like_reminder_confirm(brief, first_fact)
+
     @staticmethod
     def _looks_like_timing_shift_reply(brief: ReplyBrief, first_fact: str | None) -> bool:
         if brief.response_goal != "confirm_update" or not first_fact:
@@ -1153,6 +1167,53 @@ class ConversationComposer:
         return "switched it" in lowered_fact or "works for" in lowered_fact or lowered_fact.startswith(
             ("okay ", "bet", "tomorrow", "monday", "tonight", "this ", "next ")
         )
+
+    @classmethod
+    def _is_reschedule_brief(cls, brief: ReplyBrief, first_fact: str | None) -> bool:
+        return "action=reschedule" in (brief.operational_reason or "") or cls._looks_like_timing_shift_reply(brief, first_fact)
+
+    @classmethod
+    def _deterministic_reminder_ack(cls, brief: ReplyBrief) -> str:
+        variants = [
+            "okay bet i'll remind you",
+            "i got you",
+            "igu i'll keep it in front of you",
+        ]
+        return cls._pick_fresh_variant(variants, brief)
+
+    @classmethod
+    def _deterministic_reschedule_ack(cls, brief: ReplyBrief) -> str:
+        variants = [
+            "bet",
+            "cool",
+            "i got you",
+        ]
+        return cls._pick_fresh_variant(variants, brief)
+
+    @classmethod
+    def _deterministic_archive_ack(cls, brief: ReplyBrief) -> str:
+        variants = [
+            "bet i took that out",
+            "cool i took that out",
+            "got you i took that out",
+        ]
+        return cls._pick_fresh_variant(variants, brief)
+
+    @staticmethod
+    def _pick_fresh_variant(variants: list[str], brief: ReplyBrief) -> str:
+        recent_assistant = " ".join(
+            line.split(":", 1)[1].strip().lower()
+            for line in brief.recent_thread
+            if line.startswith("assistant:")
+        )
+        preferred = sorted(
+            variants,
+            key=lambda variant: (
+                variant.lower() in recent_assistant,
+                int(hashlib.sha1(f"{brief.latest_user_message}|{variant}".encode("utf-8")).hexdigest()[:8], 16),
+            ),
+        )
+        return preferred[0]
 
     @staticmethod
     def _human_progress_followup(next_step: str | None) -> str | None:

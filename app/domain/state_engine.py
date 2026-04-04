@@ -105,9 +105,12 @@ class StateEngine:
             if len(bundle.root_tasks) == 1:
                 task = bundle.root_tasks[0]
                 outcome.key_facts_to_include.append(self._new_task_fact(task, user.timezone))
+                if self._task_action_kind(task) in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN} and task.start_after is not None:
+                    outcome.operational_reason = "intent=add_task mode=quick_reminder"
             else:
                 stack_facts = self._stack_sequence_facts(bundle.root_tasks, user.timezone)
                 outcome.key_facts_to_include.extend(stack_facts or ["okay that's a real stack"])
+                outcome.operational_reason = "intent=add_task mode=stack"
             if bundle.subtask_count:
                 outcome.key_facts_to_include.append(f"i broke one of those into {bundle.subtask_count} smaller step{'s' if bundle.subtask_count != 1 else ''}")
             if bundle.dependency_count:
@@ -216,6 +219,7 @@ class StateEngine:
             outcome.response_goal = "react_to_progress"
             outcome.mention_progress = True
             outcome.emotional_tone = "supportive"
+            outcome.operational_reason = "intent=complete_task"
             if matched:
                 mark_task_complete(matched)
                 unlocked = self._refresh_successors(matched)
@@ -244,14 +248,19 @@ class StateEngine:
             lowered = raw_text.lower()
             if "plan for" in lowered:
                 summary = self.timeline.build_project_view(session, user.id, user.timezone, raw_text)
+                outcome.operational_reason = "intent=timeline_query window=project"
             elif "weekend" in lowered:
                 summary = self.timeline.build_weekend_view(session, user.id, user.timezone)
+                outcome.operational_reason = "intent=timeline_query window=weekend"
             elif "tomorrow morning" in lowered or "tmr morning" in lowered:
                 summary = self.timeline.build_tomorrow_morning_view(session, user.id, user.timezone)
+                outcome.operational_reason = "intent=timeline_query window=tomorrow_morning"
             elif "tonight" in lowered:
                 summary = self.timeline.build_tonight_view(session, user.id, user.timezone)
+                outcome.operational_reason = "intent=timeline_query window=tonight"
             elif "next hour" in lowered:
                 summary = self.timeline.next_hour_recommendation(session, user.id, user.timezone)
+                outcome.operational_reason = "intent=timeline_query window=next_hour"
             elif custom_window := self._timeline_custom_window(raw_text, user.timezone):
                 summary = self.timeline.build_window_view(
                     session,
@@ -261,10 +270,13 @@ class StateEngine:
                     start=custom_window[1],
                     end=custom_window[2],
                 )
+                outcome.operational_reason = f"intent=timeline_query window={custom_window[0]}"
             elif "week" in lowered:
                 summary = self.timeline.build_week_view(session, user.id, user.timezone)
+                outcome.operational_reason = "intent=timeline_query window=this_week"
             else:
                 summary = self.timeline.build_today_view(session, user.id, user.timezone)
+                outcome.operational_reason = "intent=timeline_query window=today"
             outcome.key_facts_to_include.append(summary)
             outcome.should_push_for_action = True
 
@@ -313,6 +325,7 @@ class StateEngine:
                 archived_count = self._clear_active_tasks(session, user.id)
                 outcome.response_goal = "confirm_update"
                 outcome.emotional_tone = "direct"
+                outcome.operational_reason = "intent=update_task action=clear_active"
                 outcome.key_facts_to_include.append(f"cleared everything out ({archived_count} archived)")
                 outcome.should_push_for_action = archived_count == 0
                 if archived_count == 0:
@@ -334,6 +347,7 @@ class StateEngine:
                     if action == "archive":
                         archived_count = self._archive_task_and_skip_pending_reminders(session, matched)
                         session.flush()
+                        outcome.operational_reason = "intent=update_task action=archive"
                         outcome.key_facts_to_include.append(self._archive_ack_text(matched.title))
                         if archived_count > 1:
                             outcome.key_facts_to_include.append(f"that takes {archived_count - 1} linked subtasks with it")
@@ -363,6 +377,7 @@ class StateEngine:
                             if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN} and not is_window_phrase:
                                 matched.start_after = None
                             time_phrase = self._reschedule_phrase(parsed_deadline, effective_time_reference, user.timezone)
+                            outcome.operational_reason = "intent=update_task action=reschedule"
                             outcome.key_facts_to_include.append(self._reschedule_ack_text(time_phrase))
                             outcome.mention_deadline = True
                             applied_change = True

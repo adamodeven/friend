@@ -676,7 +676,7 @@ def test_acknowledge_new_task_fallback_keeps_reminder_confirm_short():
     lowered = " ".join(reply.messages).lower()
     assert "bet, got it" not in lowered
     assert "scout recruiter" not in lowered
-    assert "i'll remind you" in lowered
+    assert lowered in {"okay bet i'll remind you", "i got you", "igu i'll keep it in front of you"}
 
 
 def test_acknowledge_new_task_reminder_shortcuts_past_llm_freestyling():
@@ -691,10 +691,13 @@ def test_acknowledge_new_task_reminder_shortcuts_past_llm_freestyling():
             response_goal="acknowledge_new_task",
             latest_user_message="yo dont let me forget to email the scout recruiter tmr morning",
             key_facts_to_include=["okay bet, i'll remind you"],
+            operational_reason="intent=add_task mode=quick_reminder",
             generated_at=datetime.now(),
         )
     )
-    assert reply.messages == ["okay bet, i'll remind you"]
+    assert len(reply.messages) == 1
+    assert "scout recruiter" not in reply.messages[0].lower()
+    assert "tomorrow morning" not in reply.messages[0].lower()
 
 
 def test_acknowledge_new_task_with_followup_question_splits_cleanly():
@@ -749,7 +752,7 @@ def test_confirm_update_fallback_keeps_timing_shift_natural():
         )
     )
     lowered = " ".join(reply.messages).lower()
-    assert lowered == "bet, switched it"
+    assert lowered in {"bet", "cool", "i got you"}
 
 
 def test_confirm_update_shortcuts_past_llm_repeating_new_time():
@@ -764,10 +767,12 @@ def test_confirm_update_shortcuts_past_llm_repeating_new_time():
             response_goal="confirm_update",
             latest_user_message="actually monday morning",
             key_facts_to_include=["bet, switched it"],
+            operational_reason="intent=update_task action=reschedule",
             generated_at=datetime.now(),
         )
     )
-    assert reply.messages == ["bet, switched it"]
+    assert len(reply.messages) == 1
+    assert "monday" not in reply.messages[0].lower()
 
 
 def test_postprocess_drops_redundant_ack_after_timing_shift():
@@ -795,10 +800,12 @@ def test_confirm_update_shortcuts_simple_reschedule_without_extra_prompting():
             response_goal="confirm_update",
             latest_user_message="actually portfolio bullets can wait till friday",
             key_facts_to_include=["yep, friday works for those.", "i'd keep the rest as-is for now."],
+            operational_reason="intent=update_task action=reschedule",
             generated_at=datetime.now(),
         )
     )
-    assert reply.messages == ["yep, friday works for those."]
+    assert len(reply.messages) == 1
+    assert "friday" not in reply.messages[0].lower()
 
 
 def test_progress_followup_question_stays_short_and_human():
@@ -889,7 +896,7 @@ def test_timeline_summary_uses_more_human_plan_framing_for_tonight():
     )
     messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
     lowered = " ".join(messages.messages).lower()
-    assert "tonight i'd start with" in lowered
+    assert "tonight i'd keep it on" in lowered
     assert "finish the enclosure cad" in lowered
     assert "pay rent" in lowered
     assert "due sun" not in lowered
@@ -904,10 +911,41 @@ def test_timeline_summary_uses_by_for_week_view_instead_of_due_labels():
     )
     messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
     lowered = " ".join(messages.messages).lower()
-    assert "this week i'd start with" in lowered
+    assert "this week i'd keep it on" in lowered
     assert "by sun 4/5" in lowered
     assert "by tue 4/7" in lowered
     assert " due " not in lowered
+
+
+def test_confirm_update_reschedule_shortcut_avoids_repeating_new_window():
+    reply = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(
+        ReplyBrief(
+            response_goal="confirm_update",
+            latest_user_message="actually do monday instead",
+            key_facts_to_include=["bet, switched it"],
+            operational_reason="intent=update_task action=reschedule",
+            generated_at=datetime.now(),
+        )
+    )
+    lowered = reply.messages[0].lower()
+    assert lowered in {"bet", "cool", "i got you"}
+    assert "monday" not in lowered
+
+
+def test_reminder_confirm_shortcut_does_not_repeat_task_or_time():
+    reply = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(
+        ReplyBrief(
+            response_goal="acknowledge_new_task",
+            latest_user_message="dont let me forget to text my roommate tomorrow morning",
+            key_facts_to_include=["okay bet, i'll remind you"],
+            operational_reason="intent=add_task mode=quick_reminder",
+            generated_at=datetime.now(),
+        )
+    )
+    lowered = reply.messages[0].lower()
+    assert "roommate" not in lowered
+    assert "tomorrow morning" not in lowered
+    assert lowered in {"okay bet i'll remind you", "i got you", "igu i'll keep it in front of you"}
 
 
 def test_timeline_summary_project_view_uses_for_label_not_heading_literal():

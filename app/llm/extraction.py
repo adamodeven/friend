@@ -462,6 +462,9 @@ class IntentExtractor:
             "",
             cleaned,
         )
+        cleaned = re.sub(r"\bthe cad for the ([a-z0-9 ]+)$", r"the \1 cad", cleaned)
+        cleaned = re.sub(r"\bcad for the ([a-z0-9 ]+)$", r"\1 cad", cleaned)
+        cleaned = re.sub(r"\bcad for ([a-z0-9 ]+)$", r"\1 cad", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.-")
         while re.search(r"\b(by|before|after|for|to|at|on|with)$", cleaned):
             cleaned = re.sub(r"\b(by|before|after|for|to|at|on|with)$", "", cleaned).strip(" ,.-")
@@ -470,6 +473,21 @@ class IntentExtractor:
         if not cleaned:
             return "Task update"
         return cleaned[0].upper() + cleaned[1:]
+
+    @staticmethod
+    def _semantic_task_key(title: str) -> str:
+        cleaned = IntentExtractor._sanitize_task_title(title).lower()
+        cleaned = re.sub(
+            r"^(finish|fix|prep|prepare|build|write|clean up|update|review|submit|design|model|outline|send|email|text|call|reply|pay|book|schedule|renew|cancel|buy|draft|apply|upload|export|print)\s+",
+            "",
+            cleaned,
+        )
+        tokens = [
+            token
+            for token in re.findall(r"[a-z0-9]+", cleaned)
+            if token not in {"the", "a", "an", "my", "your", "that", "this", "for", "to", "of", "on", "up", "back"}
+        ]
+        return " ".join(sorted(tokens))
 
     @staticmethod
     def _extract_deadline_phrase(text: str) -> str | None:
@@ -540,7 +558,7 @@ class IntentExtractor:
             task = self._build_task_from_segment(segment, timezone=timezone)
             if not task:
                 continue
-            dedupe_key = f"{task.title.lower()}::{(task.deadline_text or '').lower()}"
+            dedupe_key = f"{self._semantic_task_key(task.title)}::{(task.deadline_text or '').lower()}"
             if dedupe_key in seen_titles:
                 continue
             seen_titles.add(dedupe_key)

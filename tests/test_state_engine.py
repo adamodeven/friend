@@ -851,6 +851,21 @@ def test_multi_task_add_with_clear_mixed_timing_sequences_without_kicking_back_p
     assert "enclosure cad" in (outcome.suggested_next_step or "").lower()
 
 
+def test_reusable_task_matching_handles_semantically_equivalent_titles(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    existing = create_task(db_session, user_id=user.id, title="Finish enclosure CAD", priority=4)
+    reused = StateEngine._find_reusable_task(  # noqa: SLF001
+        db_session,
+        user_id=user.id,
+        title="Finish the CAD for the enclosure",
+        parent_task=None,
+        title_index={},
+    )
+    assert reused is not None
+    assert reused.id == existing.id
+
+
 def test_assignment_detail_followup_with_due_date_does_not_keep_asking_for_details(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None

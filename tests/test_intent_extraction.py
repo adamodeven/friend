@@ -253,8 +253,19 @@ def test_fallback_multitask_split_keeps_clean_titles_with_trailing_preposition_r
     )
     assert result.intent == "add_task"
     assert len(result.tasks) == 2
-    assert result.tasks[0].title.lower() == "finish the cad for the enclosure"
+    assert result.tasks[0].title.lower() == "finish the enclosure cad"
     assert result.tasks[1].title.lower() == "send that email"
+
+
+def test_cad_title_is_normalized_to_humaner_order():
+    extractor = IntentExtractor()
+    result = extractor.extract(
+        "yo i need to finish the CAD for the enclosure by tomorrow night",
+        "America/New_York",
+    )
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert result.task.title == "Finish the enclosure cad"
 
 
 def test_ambiguous_later_stays_soft_without_forcing_clarification():

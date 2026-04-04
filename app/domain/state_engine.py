@@ -1465,8 +1465,8 @@ class StateEngine:
         parent_task: Task | None,
         title_index: dict[str, Task],
     ) -> Task | None:
-        normalized = StateEngine._normalize_title(title)
-        indexed = title_index.get(normalized)
+        keys = StateEngine._title_keys(title)
+        indexed = next((title_index[key] for key in keys if key in title_index), None)
         parent_task_id = parent_task.id if parent_task else None
         if indexed is not None and indexed.parent_task_id == parent_task_id:
             return indexed
@@ -1476,13 +1476,15 @@ class StateEngine:
                 and StateEngine._is_placeholder_assignment_title(title)
                 and task.parent_task_id == parent_task_id
             ):
-                title_index.setdefault(normalized, task)
+                for key in keys:
+                    title_index.setdefault(key, task)
                 return task
-            if StateEngine._normalize_title(task.title) != normalized:
+            if not StateEngine._task_titles_equivalent(task.title, title):
                 continue
             if task.parent_task_id != parent_task_id:
                 continue
-            title_index.setdefault(normalized, task)
+            for key in keys:
+                title_index.setdefault(key, task)
             return task
         return None
 
@@ -1904,6 +1906,8 @@ class StateEngine:
         for prefix in prefixes:
             if lowered.startswith(prefix):
                 remainder = lowered[len(prefix) :].strip()
+                remainder = re.sub(r"^the cad for the ([a-z0-9 ]+)$", r"the \1 cad", remainder)
+                remainder = re.sub(r"^cad for the ([a-z0-9 ]+)$", r"\1 cad", remainder)
                 if prefix == "update " and remainder.startswith("my "):
                     remainder = f"the {remainder[3:]}"
                 elif prefix == "clean up " and remainder.startswith("my "):
@@ -2023,12 +2027,13 @@ class StateEngine:
         )
 
     def _lookup_task_by_title(self, session: Session, user_id, title: str, *, title_index: dict[str, Task]) -> Task | None:
-        normalized = self._normalize_title(title)
-        if normalized in title_index:
-            return title_index[normalized]
+        for key in self._title_keys(title):
+            if key in title_index:
+                return title_index[key]
         found = self._find_task_any_status(session, user_id, title)
         if found is not None:
-            title_index.setdefault(normalized, found)
+            for key in self._title_keys(title):
+                title_index.setdefault(key, found)
         return found
 
     @staticmethod
@@ -2043,7 +2048,49 @@ class StateEngine:
 
     @staticmethod
     def _normalize_title(title: str) -> str:
-        return re.sub(r"\s+", " ", title.strip().lower())
+        cleaned = re.sub(r"\s+", " ", title.strip().lower())
+        cleaned = re.sub(r"\bcad for the ([a-z0-9 ]+)$", r"\1 cad", cleaned)
+        cleaned = re.sub(r"\bcad for ([a-z0-9 ]+)$", r"\1 cad", cleaned)
+        return cleaned
+
+    @classmethod
+    def _title_keys(cls, title: str) -> tuple[str, ...]:
+        normalized = cls._normalize_title(title)
+        semantic = cls._semantic_title_key(title)
+        if semantic and semantic != normalized:
+            return (normalized, f"semantic::{semantic}")
+        return (normalized,)
+
+    @classmethod
+    def _semantic_title_key(cls, title: str) -> str:
+        lowered = cls._normalize_title(title)
+        lowered = re.sub(
+            r"^(finish|fix|prep|prepare|build|write|clean up|update|review|submit|design|model|outline|send|email|text|call|reply|pay|book|schedule|renew|cancel|buy|draft|apply|upload|export|print)\s+",
+            "",
+            lowered,
+        )
+        tokens = [
+            token
+            for token in re.findall(r"[a-z0-9]+", lowered)
+            if token not in {"the", "a", "an", "my", "your", "that", "this", "for", "to", "of", "on", "up", "back"}
+        ]
+        if not tokens:
+            return ""
+        return " ".join(sorted(tokens))
+
+    @classmethod
+    def _task_titles_equivalent(cls, left: str, right: str) -> bool:
+        left_normalized = cls._normalize_title(left)
+        right_normalized = cls._normalize_title(right)
+        if left_normalized == right_normalized:
+            return True
+        left_semantic = cls._semantic_title_key(left)
+        right_semantic = cls._semantic_title_key(right)
+        if left_semantic and right_semantic and left_semantic == right_semantic:
+            return True
+        left_tokens = set(left_semantic.split()) if left_semantic else set()
+        right_tokens = set(right_semantic.split()) if right_semantic else set()
+        return bool(left_tokens and right_tokens and left_tokens == right_tokens)
 
     @staticmethod
     def _is_placeholder_assignment_title(title: str | None) -> bool:

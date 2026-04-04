@@ -179,7 +179,7 @@ def test_end_to_end_conversation_sequence_updates_state(db_session):
     tasks = db_session.execute(select(Task).where(Task.user_id == user.id)).scalars().all()
     assert len(tasks) >= 4
     assert any(task.title == "Prepare fabrication checklist" for task in tasks)
-    assert any("cad for the enclosure" in task.title.lower() for task in tasks)
+    assert any("enclosure cad" in task.title.lower() for task in tasks)
     assert any("scout job application" in task.title.lower() for task in tasks)
     assert any("portfolio website" in task.title.lower() for task in tasks)
     assert any(task.status in {TaskStatus.active, TaskStatus.blocked, TaskStatus.completed} for task in tasks)

@@ -1632,12 +1632,12 @@ class StateEngine:
 
     def _crowded_load_focus_fact(self, task: Task) -> str | None:
         action_kind = self._task_action_kind(task)
-        lowered_title = task.title[0].lower() + task.title[1:] if task.title else ""
-        if not lowered_title:
+        focus_subject = self._work_task_subject(task.title)
+        if not focus_subject:
             return None
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
             return None
-        return f"the main thing i'd keep in front is {lowered_title}"
+        return f"the main thing i'd keep in front is {focus_subject}"
 
     def _stack_sequence_facts(self, tasks: list[Task], timezone_name: str) -> list[str]:
         ranked = self._rank_new_tasks(tasks, timezone_name)
@@ -1670,16 +1670,16 @@ class StateEngine:
         return facts
 
     def _stack_lead_fact(self, task: Task, timezone_name: str) -> str | None:
-        lowered_title = task.title[0].lower() + task.title[1:] if task.title else ""
-        if not lowered_title:
+        focus_subject = self._work_task_subject(task.title)
+        if not focus_subject:
             return None
         action_kind = self._task_action_kind(task)
         deadline_phrase = humanize_window_phrase(task.deadline_source_phrase)
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
             return f"i'd just knock out {self._quick_task_subject(task.title)} first"
         if deadline_phrase in {"tonight", "today"}:
-            return f"i'd start with {lowered_title} tonight"
-        return f"i'd start with {lowered_title}"
+            return f"i'd start with {focus_subject} tonight"
+        return f"i'd start with {focus_subject}"
 
     def _should_mention_followup_task(self, task: Task, timezone_name: str) -> bool:
         action_kind = self._task_action_kind(task)
@@ -1702,10 +1702,10 @@ class StateEngine:
         if action_kind == ACTION_KIND_QUICK_MESSAGE:
             subject = self._quick_task_subject(task.title)
             return f"then just handle {subject}"
-        lowered_title = task.title[0].lower() + task.title[1:] if task.title else ""
-        if not lowered_title:
+        focus_subject = self._work_task_subject(task.title)
+        if not focus_subject:
             return None
-        return f"then i'd roll into {lowered_title}"
+        return f"then i'd roll into {focus_subject}"
 
     def _stack_hold_fact(self, ordered: list[Task], focus: Task, timezone_name: str) -> str | None:
         waiting = [task for task in ordered if task.id != focus.id]
@@ -1733,6 +1733,9 @@ class StateEngine:
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
             subject = self._quick_task_subject(task.title)
             return f"if you could also clear {subject} next that'd be huge"
+        focus_subject = self._work_task_subject(task.title)
+        if focus_subject and task.title.lower().startswith("finish "):
+            return f"if you could also get {focus_subject} done next that'd be huge"
         return f"if you could also {next_step} next that'd be huge"
 
     @staticmethod
@@ -1825,6 +1828,38 @@ class StateEngine:
             return f"dming {lowered[3:]}"
         if lowered.startswith("ping "):
             return f"pinging {lowered[5:]}"
+        return lowered
+
+    @staticmethod
+    def _work_task_subject(title: str) -> str:
+        lowered = title.strip().lower()
+        if not lowered:
+            return ""
+        prefixes = (
+            "finish ",
+            "fix ",
+            "prep ",
+            "prepare ",
+            "build ",
+            "write ",
+            "clean up ",
+            "update ",
+            "review ",
+            "submit ",
+            "design ",
+            "model ",
+            "outline ",
+        )
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                remainder = lowered[len(prefix) :].strip()
+                if prefix == "update " and remainder.startswith("my "):
+                    remainder = f"the {remainder[3:]}"
+                elif prefix == "clean up " and remainder.startswith("my "):
+                    remainder = f"the {remainder[3:]}"
+                if not remainder.startswith(("the ", "my ", "a ", "an ")):
+                    remainder = f"the {remainder}"
+                return remainder
         return lowered
 
     @staticmethod

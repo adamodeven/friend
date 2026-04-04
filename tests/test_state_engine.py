@@ -663,7 +663,7 @@ def test_complete_task_adds_more_human_followup_for_next_work(db_session):
 
     assert outcome.response_goal == "react_to_progress"
     assert outcome.key_facts_to_include[0] == "bet"
-    assert any("if you could also finish the enclosure cad next that'd be huge" == fact for fact in outcome.key_facts_to_include)
+    assert any("if you could also get the enclosure cad done next that'd be huge" == fact for fact in outcome.key_facts_to_include)
 
 
 def test_stack_sequence_falls_back_to_human_hold_fact_when_followup_is_future_windowed(db_session):
@@ -840,7 +840,7 @@ def test_multi_task_add_with_clear_mixed_timing_sequences_without_kicking_back_p
 
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_ask_question is False
-    assert any("i'd start with finish the enclosure cad" in fact.lower() for fact in outcome.key_facts_to_include)
+    assert any("i'd start with the enclosure cad" in fact.lower() for fact in outcome.key_facts_to_include)
     assert any("then just clear rent" in fact.lower() for fact in outcome.key_facts_to_include)
     assert not any("deadline coming up" in fact.lower() for fact in outcome.key_facts_to_include)
     assert outcome.should_push_for_action is True

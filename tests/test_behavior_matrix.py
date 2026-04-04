@@ -195,7 +195,7 @@ def test_state_matrix_sequences_mixed_stack_when_one_task_is_clearly_the_real_wo
         raw_text="i need to finish the enclosure cad by tomorrow night and send the scout followup monday morning and pay rent tonight and text my roommate tomorrow morning",
     )
     assert outcome.should_ask_question is False
-    assert any("i'd start with finish enclosure cad" in fact.lower() for fact in outcome.key_facts_to_include)
+    assert any("i'd start with the enclosure cad" in fact.lower() for fact in outcome.key_facts_to_include)
 
 
 def test_state_matrix_placeholder_assignment_without_details_prompts_for_followup(db_session):

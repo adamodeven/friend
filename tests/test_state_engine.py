@@ -69,7 +69,7 @@ def test_add_task_persists_multiple_tasks_subtasks_and_dependencies(db_session):
     assert email_task.status == TaskStatus.blocked
     assert {dependency.predecessor_task_id for dependency in dependencies} == {subtask.id, prerequisite.id}
     assert outcome.is_multi_task_turn is True
-    assert any("if i were calling it, i'd start with" in fact.lower() for fact in outcome.key_facts_to_include)
+    assert any("i'd start with" in fact.lower() for fact in outcome.key_facts_to_include)
     assert any("broke one of those into 1 smaller step" in fact for fact in outcome.key_facts_to_include)
     assert any("dependency" in fact for fact in outcome.key_facts_to_include)
 
@@ -163,7 +163,7 @@ def test_assignment_detail_followup_reuses_and_refines_existing_placeholder_task
     assert task.title == "New assignment from studio"
     assert task.deadline_source_phrase == "tuesday night"
     assert followup.response_goal == "acknowledge_new_task"
-    assert any("that studio assignment's due tuesday night" in fact.lower() for fact in followup.key_facts_to_include)
+    assert any("studio's in for tuesday night" in fact.lower() for fact in followup.key_facts_to_include)
 
 
 def test_status_query_meta_gets_direct_explanation(db_session):
@@ -657,7 +657,7 @@ def test_stack_sequence_falls_back_to_human_hold_fact_when_followup_is_future_wi
         ),
         raw_text="finish the enclosure cad by tomorrow night and text my roommate tomorrow morning and send scout followup monday morning",
     )
-    assert any("the rest can sit on their times for now" == fact for fact in outcome.key_facts_to_include)
+    assert any("the rest can wait for their window" == fact for fact in outcome.key_facts_to_include)
     assert outcome.should_ask_question is False
 
 
@@ -759,7 +759,7 @@ def test_multi_task_add_with_limited_timing_asks_one_prioritization_question(db_
 
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_ask_question is True
-    assert outcome.question_if_needed == "which one gets annoying first if it slips?"
+    assert outcome.question_if_needed == "which one gets ugly first if it slips?"
 
 
 def test_multi_task_add_with_clear_mixed_timing_sequences_without_kicking_back_priority(db_session):
@@ -791,7 +791,7 @@ def test_multi_task_add_with_clear_mixed_timing_sequences_without_kicking_back_p
 
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_ask_question is False
-    assert any("if i were calling it, i'd start with finish the enclosure CAD".lower() in fact.lower() for fact in outcome.key_facts_to_include)
+    assert any("i'd start with finish the enclosure cad" in fact.lower() for fact in outcome.key_facts_to_include)
     assert any("then just clear rent" in fact.lower() for fact in outcome.key_facts_to_include)
     assert not any("deadline coming up" in fact.lower() for fact in outcome.key_facts_to_include)
     assert outcome.should_push_for_action is True

@@ -383,13 +383,21 @@ class IntentExtractor:
     @staticmethod
     def _clarification_for_time(time_reference: str) -> str:
         clean = time_reference.strip()
-        return f"quick one: when exactly do you want '{clean}' to mean?"
+        if "before studio" in clean.lower():
+            return "what time is studio?"
+        if "after class" in clean.lower():
+            return "what time does class let out?"
+        return f"what time should i use for {clean}?"
 
     @staticmethod
     def _clarification_for_task_time(task_title: str, time_reference: str) -> str:
         cleaned_task = task_title.strip()
         cleaned_ref = time_reference.strip()
-        return f"quick clarify: for '{cleaned_task}', what exact time should i use for '{cleaned_ref}'?"
+        if "before studio" in cleaned_ref.lower():
+            return "what time is studio?"
+        if "after class" in cleaned_ref.lower():
+            return "what time does class let out?"
+        return f"for {cleaned_task}, what time should i use for {cleaned_ref}?"
 
     @staticmethod
     def _looks_like_dependency_blocker(text: str) -> bool:

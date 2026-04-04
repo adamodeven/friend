@@ -268,7 +268,7 @@ def test_llm_later_deadline_does_not_force_clarification():
         "intent": "add_task",
         "confidence": 0.78,
         "needs_clarification": True,
-        "clarification_question": "quick clarify: for 'Fix the website', what exact time should i use for 'later'?",
+        "clarification_question": "for Fix the website, what time should i use for later?",
         "task": {
             "title": "fix the website later",
             "description": None,

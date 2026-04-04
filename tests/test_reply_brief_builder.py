@@ -148,7 +148,7 @@ def test_reply_brief_preserves_multi_task_turn_flag(db_session):
         latest_user_message="need to finish cad and pay rent tonight",
         outcome=StateOutcome(
             response_goal="acknowledge_new_task",
-            key_facts_to_include=["if i were calling it, i'd start with finish cad"],
+            key_facts_to_include=["i'd start with finish cad"],
             is_multi_task_turn=True,
         ),
     )

@@ -85,3 +85,18 @@ def humanize_window_phrase(phrase: str | None) -> str | None:
         "weekend": "this weekend",
     }
     return replacements.get(lowered, lowered)
+
+
+def is_broad_window_phrase(phrase: str | None) -> bool:
+    lowered = humanize_window_phrase(phrase)
+    if not lowered:
+        return False
+    return lowered in {
+        "this weekend",
+        "weekend",
+        "later",
+        "sometime",
+        "eventually",
+        "after class",
+        "before studio",
+    }

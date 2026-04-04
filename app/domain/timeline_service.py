@@ -9,7 +9,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Task, TaskDependency, TaskStatus
-from app.domain.task_semantics import ACTION_KIND_QUICK_ADMIN, ACTION_KIND_QUICK_MESSAGE, humanize_window_phrase, infer_action_kind
+from app.domain.task_semantics import (
+    ACTION_KIND_PROJECT_CHUNK,
+    ACTION_KIND_QUICK_ADMIN,
+    ACTION_KIND_QUICK_MESSAGE,
+    ACTION_KIND_WORK_BLOCK,
+    humanize_window_phrase,
+    infer_action_kind,
+    is_broad_window_phrase,
+)
 
 
 @dataclass(slots=True)
@@ -133,7 +141,7 @@ class TimelineService:
         ranked = self._ranked_tasks(session, user_id, timezone, horizon=datetime.now(tz=ZoneInfo(timezone)) + timedelta(hours=8))
         if not ranked:
             return "no active tasks are tracked right now. send the next thing you want handled and i'll slot it."
-        top = ranked[0]
+        top = self._next_hour_focus(ranked, timezone)
         move = self._next_hour_move_text(top.task)
         if top.unlocks:
             return f"for the next hour i'd stay on {move}. that clears the way for {top.unlocks[0]}."
@@ -179,18 +187,20 @@ class TimelineService:
             start_after = self._ensure_tz(task.start_after, now.tzinfo) if task.start_after else None
             actionable = task.status == TaskStatus.active and not unresolved and (start_after is None or start_after <= now)
             action_kind = self._task_action_kind(task)
+            window_phrase = humanize_window_phrase(task.deadline_source_phrase)
 
             score = task.priority * 18
             due_at = self._ensure_tz(task.deadline_at, now.tzinfo) if task.deadline_at else None
             due_label: str | None = None
+            if task.deadline_is_ambiguous and window_phrase:
+                due_label = f"for {window_phrase}"
             if start_after is not None and start_after > now:
                 wait_delta = start_after - now
                 score -= 220
                 if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
                     score -= 150
-                pretty_window = humanize_window_phrase(task.deadline_source_phrase)
-                if pretty_window:
-                    due_label = f"for {pretty_window}"
+                if window_phrase:
+                    due_label = f"for {window_phrase}"
                 elif wait_delta <= timedelta(hours=12):
                     due_label = f"for {start_after.astimezone(ZoneInfo(timezone)).strftime('%-I:%M%p').lower()}"
                 else:
@@ -199,34 +209,50 @@ class TimelineService:
                 delta = due_at - now
                 if delta <= timedelta(0):
                     score += 420
-                    if start_after is None or start_after <= now:
+                    if due_label is None and (start_after is None or start_after <= now):
                         due_label = "now"
                 elif delta <= timedelta(hours=2):
                     score += 360
-                    if start_after is None or start_after <= now:
+                    if due_label is None and (start_after is None or start_after <= now):
                         due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%-I:%M%p").lower()
                 elif delta <= timedelta(hours=8):
                     score += 310
-                    if start_after is None or start_after <= now:
+                    if due_label is None and (start_after is None or start_after <= now):
                         due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%-I:%M%p").lower()
                 elif delta <= timedelta(days=1):
                     score += 250
-                    if start_after is None or start_after <= now:
+                    if due_label is None and (start_after is None or start_after <= now):
                         due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%-I:%M%p").lower()
                 elif delta <= timedelta(days=3):
                     score += 180
-                    if start_after is None or start_after <= now:
+                    if due_label is None and (start_after is None or start_after <= now):
                         due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%a %-m/%-d").lower()
                 elif delta <= timedelta(days=7):
                     score += 120
-                    if start_after is None or start_after <= now:
+                    if due_label is None and (start_after is None or start_after <= now):
                         due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%a %-m/%-d").lower()
                 elif due_at <= horizon:
                     score += 80
-                    if start_after is None or start_after <= now:
+                    if due_label is None and (start_after is None or start_after <= now):
                         due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%a %-m/%-d").lower()
             else:
                 score += 45
+
+            if action_kind == ACTION_KIND_PROJECT_CHUNK:
+                score += 80
+            elif action_kind == ACTION_KIND_WORK_BLOCK:
+                score += 40
+            elif action_kind == ACTION_KIND_QUICK_ADMIN:
+                score -= 45
+            elif action_kind == ACTION_KIND_QUICK_MESSAGE:
+                score -= 65
+
+            if task.deadline_is_ambiguous:
+                score -= 90
+            if task.deadline_granularity in {"weekend", "week"}:
+                score -= 60
+            if is_broad_window_phrase(task.deadline_source_phrase):
+                score -= 40
 
             if actionable:
                 score += 35
@@ -283,6 +309,29 @@ class TimelineService:
             )
         )
         return ranked
+
+    def _next_hour_focus(self, ranked: list[RankedTask], timezone: str) -> RankedTask:
+        if not ranked:
+            raise ValueError("ranked tasks cannot be empty")
+        top = ranked[0]
+        top_kind = self._task_action_kind(top.task)
+        if top_kind not in {ACTION_KIND_QUICK_ADMIN, ACTION_KIND_QUICK_MESSAGE}:
+            return top
+
+        now = datetime.now(tz=ZoneInfo(timezone))
+        top_due = self._ensure_tz(top.task.deadline_at, now.tzinfo) if top.task.deadline_at else None
+        if top_due is not None and top_due - now <= timedelta(hours=2):
+            return top
+
+        for candidate in ranked[1:]:
+            candidate_kind = self._task_action_kind(candidate.task)
+            if candidate_kind in {ACTION_KIND_QUICK_ADMIN, ACTION_KIND_QUICK_MESSAGE}:
+                continue
+            if candidate.task.deadline_is_ambiguous and is_broad_window_phrase(candidate.task.deadline_source_phrase):
+                continue
+            if candidate.score + 40 >= top.score:
+                return candidate
+        return top
 
     @staticmethod
     def _render_plan(label: str, ranked: list[RankedTask], timezone: str) -> str:

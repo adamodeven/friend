@@ -30,6 +30,7 @@ from app.domain.task_semantics import (
     default_next_step,
     infer_action_kind,
     humanize_window_phrase,
+    is_broad_window_phrase,
     is_soft_later_phrase,
 )
 from app.domain.timeline_service import TimelineService
@@ -190,7 +191,7 @@ class StateEngine:
                 outcome.question_if_needed = "want me to break that into 2 quick checkpoints?"
             elif len(bundle.root_tasks) >= 3 and self._should_ask_load_prioritization_question(bundle.root_tasks, user.timezone):
                 outcome.should_ask_question = True
-                outcome.question_if_needed = "which one gets annoying first if it slips?"
+                outcome.question_if_needed = "which one gets ugly first if it slips?"
                 outcome.should_push_for_action = False
                 outcome.suggested_next_step = None
             else:
@@ -199,14 +200,14 @@ class StateEngine:
 
             if needs_post_context_followup and not outcome.should_ask_question:
                 outcome.should_ask_question = True
-                outcome.question_if_needed = "when you're out, send me the details and i'll fit it in right"
+                outcome.question_if_needed = "when you're out, send me the details and i'll sort it"
             elif (
                 len(bundle.root_tasks) == 1
                 and self._placeholder_assignment_needs_details(bundle.root_tasks)
                 and not outcome.should_ask_question
             ):
                 outcome.should_ask_question = True
-                outcome.question_if_needed = "send me the details when you have them and i'll fit it in right"
+                outcome.question_if_needed = "send me the details when you have them and i'll sort it"
                 outcome.should_push_for_action = False
                 outcome.suggested_next_step = None
 
@@ -1051,7 +1052,12 @@ class StateEngine:
         cleaned_ref = time_reference.strip()
         if len(cleaned_task) > 80:
             cleaned_task = f"{cleaned_task[:77].rstrip()}..."
-        return f"quick clarify: for '{cleaned_task}', what exact time should i use for '{cleaned_ref}'?"
+        lowered_ref = cleaned_ref.lower()
+        if "before studio" in lowered_ref:
+            return "what time is studio?"
+        if "after class" in lowered_ref:
+            return "what time does class let out?"
+        return f"for {cleaned_task}, what time should i use for {cleaned_ref}?"
 
     @staticmethod
     def _time_reference_needs_followup(time_reference: str) -> bool:
@@ -1404,6 +1410,12 @@ class StateEngine:
                 score -= 120
             if is_soft_later_phrase(task.deadline_source_phrase):
                 score -= 90
+            if task.deadline_is_ambiguous:
+                score -= 80
+            if task.deadline_granularity in {"weekend", "week"}:
+                score -= 50
+            if is_broad_window_phrase(task.deadline_source_phrase):
+                score -= 30
             if self._is_placeholder_assignment_title(task.title):
                 score -= 140
             if action_kind == ACTION_KIND_PROJECT_CHUNK:
@@ -1570,8 +1582,9 @@ class StateEngine:
         if self._looks_like_placeholder_assignment([task]):
             label = self._placeholder_assignment_label(task.title)
             if time_phrase:
-                return f"got it, {label}'s due {time_phrase}"
-            return f"got you, sounds like {label} just came in"
+                source = label.replace("that ", "").replace(" assignment", "")
+                return f"got you, {source}'s in for {time_phrase}"
+            return f"got you, {label} just came in"
         lowered_title = task.title[0].lower() + task.title[1:] if task.title else "it"
         if action_kind == ACTION_KIND_QUICK_MESSAGE and time_phrase:
             return self._quick_reminder_fact(time_phrase, is_admin=False)
@@ -1648,10 +1661,10 @@ class StateEngine:
         action_kind = self._task_action_kind(task)
         deadline_phrase = humanize_window_phrase(task.deadline_source_phrase)
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
-            return f"i'd just clear {self._quick_task_subject(task.title)} first"
+            return f"i'd just knock out {self._quick_task_subject(task.title)} first"
         if deadline_phrase in {"tonight", "today"}:
-            return f"if i were calling tonight, i'd start with {lowered_title}"
-        return f"if i were calling it, i'd start with {lowered_title}"
+            return f"i'd start with {lowered_title} tonight"
+        return f"i'd start with {lowered_title}"
 
     def _should_mention_followup_task(self, task: Task, timezone_name: str) -> bool:
         action_kind = self._task_action_kind(task)
@@ -1670,7 +1683,7 @@ class StateEngine:
         action_kind = self._task_action_kind(task)
         if action_kind == ACTION_KIND_QUICK_ADMIN:
             subject = self._quick_task_subject(task.title)
-            return f"then just clear {subject} so it stops hanging there"
+            return f"then just clear {subject}"
         if action_kind == ACTION_KIND_QUICK_MESSAGE:
             subject = self._quick_task_subject(task.title)
             return f"then just handle {subject}"
@@ -1691,7 +1704,7 @@ class StateEngine:
             and self._normalize_dt(task.start_after, timezone_name) > now
         ]
         if windowed:
-            return "the rest can sit on their times for now"
+            return "the rest can wait for their window"
         quick = [task for task in waiting if self._task_action_kind(task) in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}]
         if quick:
             return "the smaller stuff can wait till right after"

@@ -264,6 +264,76 @@ def test_next_hour_recommendation_prefers_unlocking_move(db_session):
     assert "clears the way for submit application" in lowered
 
 
+def test_next_hour_recommendation_prefers_real_work_over_broad_weekend_errand(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    tz = ZoneInfo(user.timezone)
+    now = datetime.now(tz=tz)
+
+    create_task(
+        db_session,
+        user_id=user.id,
+        title="Book a dentist appointment",
+        priority=3,
+        deadline_at=(now + timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0),
+        soft_deadline_at=now.replace(hour=10, minute=0, second=0, microsecond=0),
+        deadline_source_phrase="this weekend",
+        deadline_is_ambiguous=True,
+        deadline_granularity="weekend",
+        metadata_json={"action_kind": "quick_admin"},
+    )
+    create_task(
+        db_session,
+        user_id=user.id,
+        title="Finish the enclosure CAD",
+        priority=4,
+        deadline_at=(now + timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0),
+        metadata_json={"action_kind": "project_chunk"},
+    )
+    db_session.commit()
+
+    service = TimelineService()
+    lowered = service.next_hour_recommendation(db_session, user.id, user.timezone).lower()
+
+    assert "finish the enclosure cad" in lowered
+    assert "dentist" not in lowered
+
+
+def test_week_view_treats_weekend_errand_as_window_and_not_top_pressure(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    tz = ZoneInfo(user.timezone)
+    now = datetime.now(tz=tz)
+
+    create_task(
+        db_session,
+        user_id=user.id,
+        title="Book a dentist appointment",
+        priority=3,
+        deadline_at=(now + timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0),
+        soft_deadline_at=now.replace(hour=10, minute=0, second=0, microsecond=0),
+        deadline_source_phrase="this weekend",
+        deadline_is_ambiguous=True,
+        deadline_granularity="weekend",
+        metadata_json={"action_kind": "quick_admin"},
+    )
+    create_task(
+        db_session,
+        user_id=user.id,
+        title="Finish the enclosure CAD",
+        priority=4,
+        deadline_at=(now + timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0),
+        metadata_json={"action_kind": "project_chunk"},
+    )
+    db_session.commit()
+
+    service = TimelineService()
+    lowered = service.build_week_view(db_session, user.id, user.timezone).lower()
+
+    assert "this weekend" in lowered
+    assert lowered.index("finish the enclosure cad") < lowered.index("book a dentist appointment")
+
+
 def test_weekend_view_handles_empty_case(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None

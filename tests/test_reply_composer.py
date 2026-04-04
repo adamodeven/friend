@@ -705,13 +705,13 @@ def test_acknowledge_new_task_with_followup_question_splits_cleanly():
             latest_user_message="i need to finish the enclosure cad by tomorrow night and pay rent tonight and text my roommate tomorrow morning",
             key_facts_to_include=["okay that's a real stack"],
             should_ask_question=True,
-            question_if_needed="which one gets annoying first if it slips?",
+            question_if_needed="which one gets ugly first if it slips?",
             generated_at=datetime.now(),
         )
     )
     assert reply.messages == [
         "okay that's a real stack",
-        "which one gets annoying first if it slips?",
+        "which one gets ugly first if it slips?",
     ]
 
 
@@ -722,7 +722,7 @@ def test_acknowledge_new_task_multi_task_shortcuts_preserve_conversational_seque
             response_goal="acknowledge_new_task",
             latest_user_message="i need to finish the enclosure cad by tomorrow night and pay rent tonight and text my roommate tomorrow morning",
             key_facts_to_include=[
-                "if i were calling it, i'd start with finish the enclosure cad",
+                "i'd start with finish the enclosure cad",
                 "then just clear rent so it stops hanging there",
             ],
             is_multi_task_turn=True,
@@ -732,7 +732,7 @@ def test_acknowledge_new_task_multi_task_shortcuts_preserve_conversational_seque
         )
     )
     assert reply.messages == [
-        "if i were calling it, i'd start with finish the enclosure cad",
+        "i'd start with finish the enclosure cad",
         "then just clear rent so it stops hanging there",
     ]
 

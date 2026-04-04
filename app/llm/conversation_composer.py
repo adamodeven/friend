@@ -86,6 +86,20 @@ class ConversationComposer:
             )
 
         if (
+            brief.response_goal == "acknowledge_new_task"
+            and brief.is_multi_task_turn
+            and brief.key_facts_to_include
+            and not brief.should_ask_question
+        ):
+            stack_messages = [
+                self._sanitize_fallback_text(fact)
+                for fact in brief.key_facts_to_include[:3]
+                if self._sanitize_fallback_text(fact)
+            ]
+            if stack_messages:
+                return stack_messages[: min(brief.max_chunks, 2)]
+
+        if (
             brief.response_goal == "confirm_update"
             and first_fact
             and self._looks_like_timing_shift_reply(brief, first_fact)
@@ -97,6 +111,18 @@ class ConversationComposer:
                 max_chunks=1,
                 soft_chunk_length=style_profile.soft_chunk_chars,
             )
+
+        if (
+            brief.response_goal == "react_to_progress"
+            and first_fact
+            and brief.suggested_next_step
+            and not brief.should_ask_question
+        ):
+            followup = self._human_progress_followup(brief.suggested_next_step)
+            messages = [first_fact]
+            if followup:
+                messages.append(followup)
+            return messages[: min(brief.max_chunks, 2)]
 
         if (
             brief.response_goal == "acknowledge_new_task"
@@ -485,7 +511,7 @@ class ConversationComposer:
             if brief.should_ask_question and brief.question_if_needed:
                 base = f"{fact} {brief.question_if_needed}"
             elif brief.suggested_next_step:
-                base = f"{fact} if you could also {brief.suggested_next_step} next, that'd be huge."
+                base = f"{fact} {self._human_progress_followup(brief.suggested_next_step) or ''}".strip()
             else:
                 base = fact
         elif brief.response_goal == "replan_blocker":
@@ -955,6 +981,11 @@ class ConversationComposer:
                 messages = [message for idx, message in enumerate(messages) if idx == 0 or not cls._is_redundant_ack_bubble(message)]
                 if messages:
                     return messages[:1] if cls._looks_like_timing_shift_reply(brief, messages[0]) else messages
+        if brief.response_goal == "react_to_progress" and len(messages) >= 2:
+            if cls._normalize_text(messages[1]) == cls._normalize_text(brief.suggested_next_step or ""):
+                followup = cls._human_progress_followup(brief.suggested_next_step)
+                if followup:
+                    messages[1] = followup
         return messages
 
     @classmethod
@@ -1056,6 +1087,9 @@ class ConversationComposer:
         )
         softened = re.sub(r"\bi deleted ([^.?!]+)", r"i took \1 out", softened, flags=re.IGNORECASE)
         softened = re.sub(r"\bi archived ([^.?!]+)", r"i took \1 out", softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\bdone,\s*deleted ([^.?!]+)", r"bet, i took \1 out", softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\bdone,\s*archived ([^.?!]+)", r"bet, i took \1 out", softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\b([a-z][a-z0-9' -]{2,60}) due ([^.?!]+)", r"\1's due \2", softened, flags=re.IGNORECASE)
         softened = re.sub(r"\b([a-z ]+?) looks open right now\b", r"\1's clear right now", softened, flags=re.IGNORECASE)
         softened = re.sub(r"\bi['’]ve got it queued\b", "i've got it", softened, flags=re.IGNORECASE)
         return re.sub(r"\s{2,}", " ", softened).strip()
@@ -1090,6 +1124,16 @@ class ConversationComposer:
         return "switched it" in lowered_fact or lowered_fact.startswith(
             ("okay ", "tomorrow", "monday", "tonight", "this ", "next ")
         )
+
+    @staticmethod
+    def _human_progress_followup(next_step: str | None) -> str | None:
+        if not next_step:
+            return None
+        cleaned = next_step.strip()
+        if not cleaned:
+            return None
+        lowered = cleaned[0].lower() + cleaned[1:] if cleaned else cleaned
+        return f"if you could also {lowered} next that'd be huge"
 
     @staticmethod
     def _is_redundant_ack_bubble(message: str) -> bool:

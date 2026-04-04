@@ -114,6 +114,7 @@ class ReplyBriefBuilder:
             latest_user_message=latest_user_message,
             recent_thread=recent_thread,
             operational_reason=outcome.operational_reason,
+            is_multi_task_turn=outcome.is_multi_task_turn,
             is_short_checkin=short_checkin,
             generated_at=now,
         )

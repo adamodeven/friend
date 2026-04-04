@@ -69,7 +69,7 @@ def test_add_task_persists_multiple_tasks_subtasks_and_dependencies(db_session):
     assert email_task.status == TaskStatus.blocked
     assert {dependency.predecessor_task_id for dependency in dependencies} == {subtask.id, prerequisite.id}
     assert outcome.is_multi_task_turn is True
-    assert "okay that's a real stack" in outcome.key_facts_to_include
+    assert any("if i were calling it, i'd start with" in fact.lower() for fact in outcome.key_facts_to_include)
     assert any("broke one of those into 1 smaller step" in fact for fact in outcome.key_facts_to_include)
     assert any("dependency" in fact for fact in outcome.key_facts_to_include)
 
@@ -163,6 +163,7 @@ def test_assignment_detail_followup_reuses_and_refines_existing_placeholder_task
     assert task.title == "New assignment from studio"
     assert task.deadline_source_phrase == "tuesday night"
     assert followup.response_goal == "acknowledge_new_task"
+    assert any("that studio assignment's due tuesday night" in fact.lower() for fact in followup.key_facts_to_include)
 
 
 def test_status_query_meta_gets_direct_explanation(db_session):
@@ -587,7 +588,33 @@ def test_archive_task_action_really_archives_task_and_skips_reminders(db_session
     assert refreshed_blocked is not None
     assert refreshed_blocked.status == TaskStatus.active
     assert reminder.status == ReminderStatus.skipped
-    assert any(fact == "we're off Fix website" for fact in outcome.key_facts_to_include)
+    assert any(fact == "bet, i took fix website out" for fact in outcome.key_facts_to_include)
+
+
+def test_complete_task_adds_more_human_followup_for_next_work(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    finished = create_task(db_session, user_id=user.id, title="Pay rent", priority=4)
+    next_task = create_task(
+        db_session,
+        user_id=user.id,
+        title="Finish enclosure CAD",
+        priority=5,
+        next_step="finish the enclosure cad",
+    )
+    db_session.commit()
+
+    engine = StateEngine()
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(intent="complete_task", confidence=0.9),
+        raw_text="bet rent is done",
+    )
+
+    assert outcome.response_goal == "react_to_progress"
+    assert outcome.key_facts_to_include[0] == "bet"
+    assert any("if you could also finish the enclosure cad next that'd be huge" == fact for fact in outcome.key_facts_to_include)
     assert outcome.should_ask_question is False
 
 

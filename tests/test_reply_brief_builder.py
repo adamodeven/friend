@@ -137,6 +137,25 @@ def test_acknowledge_new_task_brief_omits_unrelated_active_context(db_session):
     assert brief.deadline_context == []
 
 
+def test_reply_brief_preserves_multi_task_turn_flag(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+
+    builder = ReplyBriefBuilder()
+    brief = builder.build(
+        db_session,
+        user=user,
+        latest_user_message="need to finish cad and pay rent tonight",
+        outcome=StateOutcome(
+            response_goal="acknowledge_new_task",
+            key_facts_to_include=["if i were calling it, i'd start with finish cad"],
+            is_multi_task_turn=True,
+        ),
+    )
+
+    assert brief.is_multi_task_turn is True
+
+
 def test_reply_brief_uses_style_profile_chunk_limits(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None

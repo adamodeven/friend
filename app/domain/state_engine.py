@@ -199,14 +199,14 @@ class StateEngine:
 
             if needs_post_context_followup and not outcome.should_ask_question:
                 outcome.should_ask_question = True
-                outcome.question_if_needed = "when you're out, send me the details and i'll slot it cleanly"
+                outcome.question_if_needed = "when you're out, send me the details and i'll fit it in right"
             elif (
                 len(bundle.root_tasks) == 1
                 and self._placeholder_assignment_needs_details(bundle.root_tasks)
                 and not outcome.should_ask_question
             ):
                 outcome.should_ask_question = True
-                outcome.question_if_needed = "send me the details when you have them and i'll slot it cleanly"
+                outcome.question_if_needed = "send me the details when you have them and i'll fit it in right"
                 outcome.should_push_for_action = False
                 outcome.suggested_next_step = None
 
@@ -219,12 +219,15 @@ class StateEngine:
                 mark_task_complete(matched)
                 unlocked = self._refresh_successors(matched)
                 session.flush()
-                outcome.key_facts_to_include.append("bet, that clears it")
+                outcome.key_facts_to_include.append("bet")
                 if unlocked:
                     outcome.key_facts_to_include.append(f"that opens up {unlocked[0].title}")
                     outcome.mention_dependency = True
                 next_task = self.timeline.recommend_next_task(session, user.id, user.timezone)
                 if next_task:
+                    followup_fact = self._completion_followup_fact(next_task)
+                    if followup_fact:
+                        outcome.key_facts_to_include.append(followup_fact)
                     outcome.suggested_next_step = self._next_step_for_task(next_task)
                     outcome.should_push_for_action = True
                     outcome.should_ask_question = False
@@ -330,7 +333,7 @@ class StateEngine:
                     if action == "archive":
                         archived_count = self._archive_task_and_skip_pending_reminders(session, matched)
                         session.flush()
-                        outcome.key_facts_to_include.append(f"we're off {matched.title}")
+                        outcome.key_facts_to_include.append(self._archive_ack_text(matched.title))
                         if archived_count > 1:
                             outcome.key_facts_to_include.append(f"that takes {archived_count - 1} linked subtasks with it")
                         applied_change = True
@@ -1567,7 +1570,7 @@ class StateEngine:
         if self._looks_like_placeholder_assignment([task]):
             label = self._placeholder_assignment_label(task.title)
             if time_phrase:
-                return f"got it, {label} is due {time_phrase}"
+                return f"got it, {label}'s due {time_phrase}"
             return f"got you, sounds like {label} just came in"
         lowered_title = task.title[0].lower() + task.title[1:] if task.title else "it"
         if action_kind == ACTION_KIND_QUICK_MESSAGE and time_phrase:
@@ -1614,7 +1617,7 @@ class StateEngine:
             return []
         ordered = [task for _, task in ranked]
         focus = self._preferred_focus_from_new_tasks(ordered, timezone_name) or ordered[0]
-        facts = ["okay that's a real stack"]
+        facts: list[str] = []
         lead = self._stack_lead_fact(focus, timezone_name)
         if lead:
             facts.append(lead)
@@ -1630,6 +1633,8 @@ class StateEngine:
             followup_fact = self._stack_followup_fact(followup, timezone_name)
             if followup_fact:
                 facts.append(followup_fact)
+        if not facts:
+            facts.append("okay that's a real stack")
         return facts
 
     def _stack_lead_fact(self, task: Task, timezone_name: str) -> str | None:
@@ -1669,6 +1674,21 @@ class StateEngine:
         if not lowered_title:
             return None
         return f"then i'd roll into {lowered_title}"
+
+    def _completion_followup_fact(self, task: Task) -> str | None:
+        next_step = self._next_step_for_task(task).strip()
+        if not next_step:
+            return None
+        action_kind = self._task_action_kind(task)
+        if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+            subject = self._quick_task_subject(task.title)
+            return f"if you could also clear {subject} next that'd be huge"
+        return f"if you could also {next_step} next that'd be huge"
+
+    @staticmethod
+    def _archive_ack_text(title: str) -> str:
+        lowered = title[0].lower() + title[1:] if title else "that"
+        return f"bet, i took {lowered} out"
 
     @staticmethod
     def _quick_reminder_fact(time_phrase: str, *, is_admin: bool) -> str:

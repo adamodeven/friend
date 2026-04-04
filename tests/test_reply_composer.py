@@ -631,6 +631,19 @@ def test_postprocess_softens_next_up_without_colon_and_deleted_language():
     assert "took the website task out" in lowered
 
 
+def test_postprocess_softens_due_phrasing_into_more_natural_text():
+    brief = ReplyBrief(
+        response_goal="acknowledge_new_task",
+        latest_user_message="actually its for studio and due tuesday night",
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
+        ["got it, studio assignment due tuesday night."],
+        brief,
+    )
+    assert messages == ["got it, studio assignment's due tuesday night."]
+
+
 def test_react_to_progress_fallback_hands_off_like_a_person():
     adapter = FakeAdapter([], enabled=False)
     composer = ConversationComposer(adapter=adapter)
@@ -645,7 +658,7 @@ def test_react_to_progress_fallback_hands_off_like_a_person():
     )
     lowered = " ".join(reply.messages).lower()
     assert "next up:" not in lowered
-    assert "website fix is done" in lowered
+    assert lowered.startswith("website fix is done")
     assert "that'd be huge" in lowered or "if you could also" in lowered
 
 
@@ -699,6 +712,28 @@ def test_acknowledge_new_task_with_followup_question_splits_cleanly():
     assert reply.messages == [
         "okay that's a real stack",
         "which one gets annoying first if it slips?",
+    ]
+
+
+def test_acknowledge_new_task_multi_task_shortcuts_preserve_conversational_sequence():
+    composer = ConversationComposer(adapter=FakeAdapter([], enabled=False))
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="acknowledge_new_task",
+            latest_user_message="i need to finish the enclosure cad by tomorrow night and pay rent tonight and text my roommate tomorrow morning",
+            key_facts_to_include=[
+                "if i were calling it, i'd start with finish the enclosure cad",
+                "then just clear rent so it stops hanging there",
+            ],
+            is_multi_task_turn=True,
+            should_push_for_action=True,
+            suggested_next_step="finish the enclosure cad",
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.messages == [
+        "if i were calling it, i'd start with finish the enclosure cad",
+        "then just clear rent so it stops hanging there",
     ]
 
 
@@ -868,3 +903,17 @@ def test_postprocess_softens_queued_language():
     lowered = " ".join(messages).lower()
     assert "queued" not in lowered
     assert "i've got it" in lowered
+
+
+def test_postprocess_replaces_raw_next_step_bubble_after_completion():
+    brief = ReplyBrief(
+        response_goal="react_to_progress",
+        latest_user_message="bet rent is done",
+        suggested_next_step="finish the enclosure cad",
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
+        ["bet", "finish the enclosure cad"],
+        brief,
+    )
+    assert messages == ["bet", "if you could also finish the enclosure cad next that'd be huge"]

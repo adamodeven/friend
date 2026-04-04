@@ -259,7 +259,7 @@ def test_next_hour_recommendation_prefers_unlocking_move(db_session):
     text = service.next_hour_recommendation(db_session, user.id, user.timezone)
     lowered = text.lower()
 
-    assert lowered.startswith("for the next hour,")
+    assert lowered.startswith("for the next hour i'd")
     assert "fix website" in lowered
     assert "clears the way for submit application" in lowered
 

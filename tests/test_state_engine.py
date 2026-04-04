@@ -723,6 +723,7 @@ def test_multi_task_add_with_clear_mixed_timing_sequences_without_kicking_back_p
     assert outcome.should_ask_question is False
     assert any("if i were calling it, i'd start with finish the enclosure CAD".lower() in fact.lower() for fact in outcome.key_facts_to_include)
     assert any("then just clear rent" in fact.lower() for fact in outcome.key_facts_to_include)
+    assert not any("deadline coming up" in fact.lower() for fact in outcome.key_facts_to_include)
     assert outcome.should_push_for_action is True
     assert "enclosure cad" in (outcome.suggested_next_step or "").lower()
 
@@ -758,6 +759,9 @@ def test_assignment_detail_followup_with_due_date_does_not_keep_asking_for_detai
 
     assert second_outcome.should_ask_question is False
     assert second_outcome.should_push_for_action is False
+    lowered_facts = [fact.lower() for fact in second_outcome.key_facts_to_include]
+    assert sum("due" in fact or "deadline" in fact for fact in lowered_facts) == 1
+    assert not any("assignment details" in fact for fact in lowered_facts)
     assert second_outcome.suggested_next_step is None
 
 

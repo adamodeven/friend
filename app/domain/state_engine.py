@@ -128,7 +128,12 @@ class StateEngine:
                     key=lambda task: self._normalize_dt(task.deadline_at, user.timezone) or datetime.max.replace(tzinfo=ZoneInfo(user.timezone)),
                 )
                 due_text = self._format_due(earliest.deadline_at, user.timezone)
-                if due_text:
+                if due_text and self._should_include_deadline_fact(
+                    bundle.root_tasks,
+                    earliest,
+                    timezone_name=user.timezone,
+                    existing_facts=outcome.key_facts_to_include,
+                ):
                     outcome.key_facts_to_include.append(f"deadline coming up {due_text}")
                 outcome.mention_deadline = True
                 if earliest.deadline_at is not None:
@@ -1571,6 +1576,27 @@ class StateEngine:
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
             return "bet, i got you"
         return "bet, locked it in"
+
+    def _should_include_deadline_fact(
+        self,
+        tasks: list[Task],
+        task: Task,
+        *,
+        timezone_name: str,
+        existing_facts: list[str],
+    ) -> bool:
+        if len(tasks) != 1:
+            return False
+        combined = " ".join(existing_facts).lower()
+        if "deadline coming up" in combined:
+            return False
+        phrase = (humanize_window_phrase(task.deadline_source_phrase) or "").lower()
+        due_text = (self._format_due(task.deadline_at, timezone_name) or "").lower()
+        if phrase and phrase in combined and "due" in combined:
+            return False
+        if due_text and due_text in combined:
+            return False
+        return True
 
     def _crowded_load_focus_fact(self, task: Task) -> str | None:
         action_kind = self._task_action_kind(task)

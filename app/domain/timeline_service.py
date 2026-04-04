@@ -134,14 +134,14 @@ class TimelineService:
         if not ranked:
             return "no active tasks are tracked right now. send the next thing you want handled and i'll slot it."
         top = ranked[0]
-        move = top.task.next_step or self._default_move_text(top.task.title)
+        move = self._next_hour_move_text(top.task)
         if top.unlocks:
-            return f"for the next hour, {move}. that clears the way for {top.unlocks[0]}."
+            return f"for the next hour i'd stay on {move}. that clears the way for {top.unlocks[0]}."
         if top.blocked_by:
-            return f"for the next hour, clear {top.blocked_by[0]} first so {top.task.title} can move."
+            return f"for the next hour i'd clear {top.blocked_by[0]} first so {top.task.title} can move."
         if top.due_label:
-            return f"for the next hour, {move}. keep it tight because it's due {top.due_label}."
-        return f"for the next hour, {move}."
+            return f"for the next hour i'd stay on {move}. that's the one with the real deadline pressure."
+        return f"for the next hour i'd stay on {move}."
 
     def recommend_next_task(self, session: Session, user_id, timezone: str) -> Task | None:
         ranked = self._ranked_tasks(session, user_id, timezone, horizon=datetime.now(tz=ZoneInfo(timezone)) + timedelta(days=7))
@@ -391,6 +391,14 @@ class TimelineService:
     @staticmethod
     def _default_move_text(task_title: str) -> str:
         return f"make a concrete dent in {task_title}"
+
+    @staticmethod
+    def _next_hour_move_text(task: Task) -> str:
+        move = task.next_step or task.title or "it"
+        move = move.strip()
+        if not move:
+            return "it"
+        return move[0].lower() + move[1:]
 
     @staticmethod
     def _task_action_kind(task: Task) -> str:

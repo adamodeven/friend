@@ -837,9 +837,13 @@ class ConversationComposer:
             (r"\bon deck\b", "in the mix"),
             (r"\bgot (\d+) things from that(?: text)?\b", r"that's \1 things on your plate"),
             (r"\bright now i'm tracking\b", "i've got"),
+            (r"\bnext up is\b", "if you can, hit"),
+            (r"\bnext up\b", "after that"),
         )
         for pattern, replacement in replacements:
             softened = re.sub(pattern, replacement, softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\bi deleted ([^.?!]+)", r"i took \1 out", softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\bi archived ([^.?!]+)", r"i took \1 out", softened, flags=re.IGNORECASE)
         return re.sub(r"\s{2,}", " ", softened).strip()
 
     @staticmethod

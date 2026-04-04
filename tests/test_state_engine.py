@@ -395,7 +395,7 @@ def test_archive_task_action_really_archives_task_and_skips_reminders(db_session
     assert refreshed_blocked is not None
     assert refreshed_blocked.status == TaskStatus.active
     assert reminder.status == ReminderStatus.skipped
-    assert any(fact == "Fix website is out" for fact in outcome.key_facts_to_include)
+    assert any(fact == "we're good on Fix website" for fact in outcome.key_facts_to_include)
     assert outcome.should_ask_question is False
 
 
@@ -481,6 +481,64 @@ def test_multi_task_add_with_limited_timing_asks_one_prioritization_question(db_
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_ask_question is True
     assert outcome.question_if_needed == "which one of those actually has the least wiggle room?"
+
+
+def test_repeat_task_mention_reuses_existing_active_task(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    existing = create_task(db_session, user_id=user.id, title="Pay rent", priority=2)
+    db_session.commit()
+
+    engine = StateEngine()
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="add_task",
+            confidence=0.9,
+            task=ExtractedTask(title="Pay rent", deadline_text="tonight", action_kind="quick_admin"),
+        ),
+        raw_text="need to pay rent tonight",
+    )
+    db_session.commit()
+
+    tasks = db_session.execute(select(Task).where(Task.title == "Pay rent")).scalars().all()
+    assert len(tasks) == 1
+    assert tasks[0].id == existing.id
+    assert outcome.response_goal == "acknowledge_new_task"
+
+
+def test_blocker_update_targets_blocked_work_not_blocker_task_itself(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    website = create_task(db_session, user_id=user.id, title="Fix the website", priority=3)
+    cad = create_task(db_session, user_id=user.id, title="Finish the enclosure cad", priority=4)
+    db_session.commit()
+
+    engine = StateEngine()
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="update_task",
+            confidence=0.86,
+            blockers=["i need to fix the website first"],
+            task_updates={"status": "blocked"},
+        ),
+        raw_text="i keep getting distracted because i need to fix the website first",
+    )
+    db_session.commit()
+
+    website = db_session.get(Task, website.id)
+    cad = db_session.get(Task, cad.id)
+    assert website is not None and cad is not None
+    assert website.status == TaskStatus.active
+    assert cad.status == TaskStatus.blocked
+    assert cad.blocked_reason is not None
+    assert "fix the website" in cad.blocked_reason.lower()
+    assert outcome.response_goal == "replan_blocker"
+    assert outcome.should_ask_question is False
+    assert "fix the website" in (outcome.suggested_next_step or "").lower()
 
 
 def test_reflection_records_slip_reason_on_task_and_memory(db_session):

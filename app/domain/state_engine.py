@@ -304,7 +304,7 @@ class StateEngine:
                     if action == "archive":
                         archived_count = self._archive_task_and_skip_pending_reminders(session, matched)
                         session.flush()
-                        outcome.key_facts_to_include.append(f"{matched.title} is out")
+                        outcome.key_facts_to_include.append(f"we're good on {matched.title}")
                         if archived_count > 1:
                             outcome.key_facts_to_include.append(f"that also clears {archived_count - 1} linked subtasks")
                         applied_change = True
@@ -522,40 +522,68 @@ class StateEngine:
             start_after=extracted.start_after,
         )
         next_step = extracted.next_step or self._default_next_step(extracted.title, action_kind=action_kind)
+        metadata = {
+            "source_text": raw_text,
+            "extracted_blockers": extracted.blockers,
+            "declared_dependency_titles": [dependency.title for dependency in extracted.dependencies],
+            "timing_kind": "windowed_action" if extracted.start_after else "deadline",
+            "action_kind": action_kind,
+        }
 
-        task = create_task(
+        task = self._find_reusable_task(
             session,
             user_id=user.id,
             title=extracted.title,
-            description=extracted.description,
-            project_id=project_id,
-            parent_task_id=parent_task.id if parent_task else None,
-            next_step=next_step,
-            deadline_at=deadline_at,
-            soft_deadline_at=soft_deadline_at,
-            start_after=extracted.start_after,
-            deadline_source_phrase=deadline_source,
-            deadline_confidence=deadline_confidence,
-            deadline_is_ambiguous=deadline_is_ambiguous,
-            deadline_granularity=deadline_granularity,
-            deadline_timezone=deadline_timezone,
-            priority=extracted.priority,
-            extraction_confidence=extracted.confidence,
-            metadata_json={
-                "source_text": raw_text,
-                "extracted_blockers": extracted.blockers,
-                "declared_dependency_titles": [dependency.title for dependency in extracted.dependencies],
-                "timing_kind": "windowed_action" if extracted.start_after else "deadline",
-                "action_kind": action_kind,
-            },
+            parent_task=parent_task,
+            title_index=title_index,
         )
-        task.user = user
-        bundle.entries.append(CapturedTaskEntry(extracted=extracted, task=task, parent_task=parent_task))
-        if parent_task is None:
+        task_is_new = task is None
+        if task is None:
+            task = create_task(
+                session,
+                user_id=user.id,
+                title=extracted.title,
+                description=extracted.description,
+                project_id=project_id,
+                parent_task_id=parent_task.id if parent_task else None,
+                next_step=next_step,
+                deadline_at=deadline_at,
+                soft_deadline_at=soft_deadline_at,
+                start_after=extracted.start_after,
+                deadline_source_phrase=deadline_source,
+                deadline_confidence=deadline_confidence,
+                deadline_is_ambiguous=deadline_is_ambiguous,
+                deadline_granularity=deadline_granularity,
+                deadline_timezone=deadline_timezone,
+                priority=extracted.priority,
+                extraction_confidence=extracted.confidence,
+                metadata_json=metadata,
+            )
+            task.user = user
+        else:
+            self._merge_extracted_into_task(
+                task,
+                extracted=extracted,
+                project_id=project_id,
+                next_step=next_step,
+                deadline_at=deadline_at,
+                soft_deadline_at=soft_deadline_at,
+                deadline_source=deadline_source,
+                deadline_confidence=deadline_confidence,
+                deadline_is_ambiguous=deadline_is_ambiguous,
+                deadline_granularity=deadline_granularity,
+                deadline_timezone=deadline_timezone,
+                action_kind=action_kind,
+                metadata=metadata,
+            )
+
+        if not any(entry.task.id == task.id and entry.parent_task == parent_task for entry in bundle.entries):
+            bundle.entries.append(CapturedTaskEntry(extracted=extracted, task=task, parent_task=parent_task))
+        if parent_task is None and not any(existing.id == task.id for existing in bundle.root_tasks):
             bundle.root_tasks.append(task)
         title_index.setdefault(self._normalize_title(task.title), task)
 
-        if task.deadline_at:
+        if task.deadline_at and (task_is_new or not any(existing.id == task.id for existing in bundle.deadline_tasks)):
             session.add(
                 DeadlineEvent(
                     user_id=user.id,
@@ -1020,6 +1048,15 @@ class StateEngine:
 
     def _resolve_update_target(self, session: Session, user_id, raw_text: str, blockers: list[str]) -> Task | None:
         matched = self._match_task_from_text(session, user_id, raw_text)
+        if blockers and matched is not None:
+            blocker_target = self._target_task_for_blocker_update(
+                session,
+                user_id=user_id,
+                matched=matched,
+                blockers=blockers,
+            )
+            if blocker_target is not None:
+                matched = blocker_target
         if matched is not None:
             return matched
         active = list_active_tasks(session, user_id)
@@ -1143,6 +1180,91 @@ class StateEngine:
         if is_soft_later_phrase(focus.deadline_source_phrase):
             return None
         return focus
+
+    @staticmethod
+    def _find_reusable_task(
+        session: Session,
+        *,
+        user_id,
+        title: str,
+        parent_task: Task | None,
+        title_index: dict[str, Task],
+    ) -> Task | None:
+        normalized = StateEngine._normalize_title(title)
+        indexed = title_index.get(normalized)
+        parent_task_id = parent_task.id if parent_task else None
+        if indexed is not None and indexed.parent_task_id == parent_task_id:
+            return indexed
+        for task in list_active_tasks(session, user_id):
+            if StateEngine._normalize_title(task.title) != normalized:
+                continue
+            if task.parent_task_id != parent_task_id:
+                continue
+            title_index.setdefault(normalized, task)
+            return task
+        return None
+
+    def _merge_extracted_into_task(
+        self,
+        task: Task,
+        *,
+        extracted: ExtractedTask,
+        project_id,
+        next_step: str,
+        deadline_at: datetime | None,
+        soft_deadline_at: datetime | None,
+        deadline_source: str | None,
+        deadline_confidence: float,
+        deadline_is_ambiguous: bool,
+        deadline_granularity: str,
+        deadline_timezone: str,
+        action_kind: str,
+        metadata: dict,
+    ) -> None:
+        if extracted.description and not task.description:
+            task.description = extracted.description
+        if project_id and task.project_id is None:
+            task.project_id = project_id
+        task.priority = max(task.priority, extracted.priority)
+        task.extraction_confidence = max(task.extraction_confidence, extracted.confidence)
+        if next_step and (task.next_step is None or task.next_step == self._default_next_step(task.title, action_kind=self._task_action_kind(task))):
+            task.next_step = next_step
+        if deadline_at is not None:
+            task.deadline_at = deadline_at
+        if soft_deadline_at is not None:
+            task.soft_deadline_at = soft_deadline_at
+        if extracted.start_after is not None:
+            task.start_after = extracted.start_after
+        if deadline_source:
+            task.deadline_source_phrase = deadline_source
+        task.deadline_confidence = max(task.deadline_confidence, deadline_confidence)
+        task.deadline_is_ambiguous = task.deadline_is_ambiguous or deadline_is_ambiguous
+        if deadline_granularity != "unknown":
+            task.deadline_granularity = deadline_granularity
+        task.deadline_timezone = deadline_timezone or task.deadline_timezone
+        merged_metadata = dict(task.metadata_json or {})
+        merged_metadata.update({k: v for k, v in metadata.items() if v not in (None, [], "")})
+        merged_metadata["action_kind"] = action_kind
+        task.metadata_json = merged_metadata
+
+    def _target_task_for_blocker_update(
+        self,
+        session: Session,
+        *,
+        user_id,
+        matched: Task,
+        blockers: list[str],
+    ) -> Task | None:
+        blocker_text = " ".join(blockers).lower()
+        if matched.title.lower() not in blocker_text:
+            return matched
+        for task in list_active_tasks(session, user_id):
+            if task.id == matched.id:
+                continue
+            if task.title.lower() in blocker_text:
+                continue
+            return task
+        return matched
 
     def _should_push_new_task_focus(
         self,

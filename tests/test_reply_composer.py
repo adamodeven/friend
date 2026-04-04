@@ -597,6 +597,22 @@ def test_postprocess_softens_tracking_dump_phrase():
     assert "4 things on your plate" in lowered
 
 
+def test_postprocess_softens_next_up_without_colon_and_deleted_language():
+    brief = ReplyBrief(
+        response_goal="react_to_progress",
+        latest_user_message="finished paying rent",
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
+        ["nice, rent’s done. next up is the enclosure cad.", "done, i deleted the website task."],
+        brief,
+    )
+    lowered = " ".join(messages).lower()
+    assert "next up" not in lowered
+    assert "deleted the website task" not in lowered
+    assert "took the website task out" in lowered
+
+
 def test_react_to_progress_fallback_hands_off_like_a_person():
     adapter = FakeAdapter([], enabled=False)
     composer = ConversationComposer(adapter=adapter)

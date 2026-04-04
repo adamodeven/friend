@@ -348,6 +348,67 @@ def test_behavior_matrix_day_only_reschedule_keeps_previous_morning_window(db_se
     assert outcome.key_facts_to_include == ["okay bet, i moved it"]
 
 
+def test_behavior_matrix_timing_followup_prefers_recent_reminder_over_other_active_tasks(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+
+    distracting = create_task(
+        db_session,
+        user_id=user.id,
+        title="Send the scout followup monday morning",
+        deadline_source_phrase="monday morning",
+        metadata_json={"action_kind": "quick_message"},
+    )
+    distracting.updated_at = datetime.now(tz=ZoneInfo(user.timezone))
+
+    first_message = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="yo dont let me forget to email the scout recruiter tmr morning",
+        external_id="SM_MATRIX_RECENT_1",
+    )
+    first_intent = IntentResult(
+        intent="add_task",
+        confidence=0.92,
+        task=ExtractedTask(
+            title="Email the scout recruiter",
+            deadline_text="tomorrow morning",
+            action_kind="quick_message",
+        ),
+    )
+    engine.apply_intent(
+        db_session,
+        user=user,
+        intent=first_intent,
+        raw_text="yo dont let me forget to email the scout recruiter tmr morning",
+        source_message_id=first_message.id,
+    )
+
+    second_message = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="actually do monday instead",
+        external_id="SM_MATRIX_RECENT_2",
+    )
+    second_intent = IntentExtractor().extract("actually do monday instead", user.timezone)
+    engine.apply_intent(
+        db_session,
+        user=user,
+        intent=second_intent,
+        raw_text="actually do monday instead",
+        source_message_id=second_message.id,
+    )
+    db_session.commit()
+
+    recent_task = db_session.execute(select(Task).where(Task.title == "Email the scout recruiter")).scalars().one()
+    distracting = db_session.execute(select(Task).where(Task.id == distracting.id)).scalars().one()
+    assert recent_task.deadline_source_phrase == "monday morning"
+    assert distracting.deadline_source_phrase == "monday morning"
+
+
 def test_behavior_matrix_tmr_morning_query_uses_actual_timeline_window(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None

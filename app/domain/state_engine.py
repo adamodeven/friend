@@ -1115,6 +1115,15 @@ class StateEngine:
         time_reference: str | None = None,
         source_message_id=None,
     ) -> Task | None:
+        if time_reference and self._looks_like_timing_followup(raw_text):
+            recent = self._recent_relevant_task(
+                session,
+                user_id=user_id,
+                source_message_id=source_message_id,
+                prefer_windowed=True,
+            )
+            if recent is not None:
+                return recent
         matched = self._match_task_from_text(session, user_id, raw_text)
         if blockers and matched is not None:
             blocker_target = self._target_task_for_blocker_update(
@@ -1127,15 +1136,6 @@ class StateEngine:
                 matched = blocker_target
         if matched is not None:
             return matched
-        if time_reference and self._looks_like_timing_followup(raw_text):
-            recent = self._recent_relevant_task(
-                session,
-                user_id=user_id,
-                source_message_id=source_message_id,
-                prefer_windowed=True,
-            )
-            if recent is not None:
-                return recent
         active = list_active_tasks(session, user_id)
         if blockers and len(active) == 1:
             return active[0]

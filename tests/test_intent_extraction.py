@@ -222,6 +222,30 @@ def test_ambiguous_later_stays_soft_without_forcing_clarification():
     assert result.task.deadline.is_ambiguous is True
 
 
+def test_llm_later_deadline_does_not_force_clarification():
+    payload = {
+        "intent": "add_task",
+        "confidence": 0.78,
+        "needs_clarification": True,
+        "clarification_question": "quick clarify: for 'Fix the website', what exact time should i use for 'later'?",
+        "task": {
+            "title": "fix the website later",
+            "description": None,
+            "project": None,
+            "deadline_text": "later",
+            "priority": 2,
+            "confidence": 0.7,
+            "next_step": None,
+        },
+    }
+    adapter = _PayloadAdapter(payload)
+    extractor = IntentExtractor(adapter=adapter)
+    result = extractor.extract("need to fix the website later", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.needs_clarification is False
+    assert result.clarification_question is None
+
+
 def test_send_email_tomorrow_morning_becomes_windowed_action_not_immediate_deadline():
     extractor = IntentExtractor()
     result = extractor.extract("need to send that email tomorrow morning", "America/New_York")

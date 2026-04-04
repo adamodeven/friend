@@ -505,13 +505,20 @@ class IntentExtractor:
         if primary_task and primary_task.deadline:
             result.time_reference = result.time_reference or primary_task.deadline.source_phrase
             result.time_confidence = max(result.time_confidence, primary_task.deadline.confidence)
-            if not result.needs_clarification and self._task_requires_time_clarification(primary_task):
+            requires_clarification = self._task_requires_time_clarification(primary_task)
+            if not result.needs_clarification and requires_clarification:
                 result.needs_clarification = True
                 if primary_task.deadline.source_phrase:
                     result.clarification_question = result.clarification_question or self._clarification_for_task_time(
                         primary_task.title,
                         primary_task.deadline.source_phrase,
                     )
+            elif not requires_clarification and primary_task.deadline.source_phrase:
+                lowered_ref = primary_task.deadline.source_phrase.lower().strip()
+                if lowered_ref in {"later", "sometime", "eventually"}:
+                    result.needs_clarification = False
+                    if result.clarification_question and lowered_ref in result.clarification_question.lower():
+                        result.clarification_question = None
 
     @staticmethod
     def _merge_deadlines(existing: ParsedDeadline | None, parsed: ParsedDeadline, timezone: str) -> ParsedDeadline:

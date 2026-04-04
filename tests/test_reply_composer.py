@@ -611,8 +611,8 @@ def test_postprocess_softens_reminder_and_reschedule_tracker_phrases():
     assert "bet, got it" not in lowered
     assert "won't let you forget" not in lowered
     assert "moved that to" not in lowered
-    assert "i'll hit you tomorrow morning" in lowered
-    assert "okay monday morning" in lowered
+    assert "i'll remind you" in lowered
+    assert "okay bet, i moved it" in lowered
 
 
 def test_postprocess_softens_next_up_without_colon_and_deleted_language():
@@ -656,14 +656,14 @@ def test_acknowledge_new_task_fallback_keeps_reminder_confirm_short():
         ReplyBrief(
             response_goal="acknowledge_new_task",
             latest_user_message="yo dont let me forget to email the scout recruiter tmr morning",
-            key_facts_to_include=["i'll hit you tomorrow morning"],
+            key_facts_to_include=["okay bet, i'll remind you"],
             generated_at=datetime.now(),
         )
     )
     lowered = " ".join(reply.messages).lower()
     assert "bet, got it" not in lowered
     assert "scout recruiter" not in lowered
-    assert "i'll hit you tomorrow morning" in lowered
+    assert "i'll remind you" in lowered
 
 
 def test_confirm_update_fallback_keeps_timing_shift_natural():
@@ -673,12 +673,12 @@ def test_confirm_update_fallback_keeps_timing_shift_natural():
         ReplyBrief(
             response_goal="confirm_update",
             latest_user_message="actually monday morning",
-            key_facts_to_include=["okay monday morning"],
+            key_facts_to_include=["okay bet, i moved it"],
             generated_at=datetime.now(),
         )
     )
     lowered = " ".join(reply.messages).lower()
-    assert lowered == "okay monday morning"
+    assert lowered == "okay bet, i moved it"
 
 
 def test_postprocess_drops_redundant_ack_after_timing_shift():
@@ -688,15 +688,32 @@ def test_postprocess_drops_redundant_ack_after_timing_shift():
         generated_at=datetime.now(),
     )
     messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
-        ["okay monday morning", "got it"],
+        ["okay bet, i moved it", "got it"],
         brief,
     )
-    assert messages == ["okay monday morning"]
+    assert messages == ["okay bet, i moved it"]
 
 
 def test_postprocess_repairs_timeline_reply_that_repeats_user_question():
     brief = ReplyBrief(
         response_goal="timeline_summary",
+        latest_user_message="what do i have on monday morning",
+        key_facts_to_include=["monday morning\n1. Email the scout recruiter - for monday morning"],
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
+        ["what do i have on monday morning, 1. Email the scout recruiter - for monday morning"],
+        brief,
+    )
+    lowered = " ".join(messages).lower()
+    assert not lowered.startswith("what do i have on monday morning")
+    assert "email the scout recruiter" in lowered
+    assert "you've got" in lowered
+
+
+def test_postprocess_repairs_answer_that_starts_by_repeating_user_question():
+    brief = ReplyBrief(
+        response_goal="answer_question",
         latest_user_message="what do i have on monday morning",
         key_facts_to_include=["monday morning\n1. Email the scout recruiter - for monday morning"],
         generated_at=datetime.now(),

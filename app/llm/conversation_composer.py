@@ -474,22 +474,63 @@ class ConversationComposer:
 
         heading: str | None = None
         items: list[str] = []
-        for line in lines:
+        for index, line in enumerate(lines):
             bullet = re.sub(r"^\s*[-*]\s*", "", line).strip()
             if not bullet:
                 continue
-            if line.endswith(":") and not heading and len(lines) > 1:
+            looks_like_numbered_item = bool(re.match(r"^\d+\.\s+", line))
+            if (
+                not heading
+                and len(lines) > 1
+                and (
+                    line.endswith(":")
+                    or (
+                        index == 0
+                        and not looks_like_numbered_item
+                        and len(line.split()) <= 4
+                    )
+                )
+            ):
                 heading = bullet.rstrip(":").strip().lower()
                 continue
             items.append(bullet)
 
         if not items:
-            return (heading + " is clear right now.") if heading else cleaned
+            return (f"{heading} looks open right now." if heading else cleaned)
 
-        compact_items = ", ".join(items[:3]).strip()
+        compact_items = [cls._humanize_timeline_item(item, heading=heading) for item in items[:3]]
+        compact_items = [item for item in compact_items if item]
+        if not compact_items:
+            return f"{heading} looks open right now." if heading else ""
+
         if heading:
-            return f"{heading}, {compact_items}"
-        return compact_items
+            if len(compact_items) == 1:
+                return f"{heading} you've got {compact_items[0]}."
+            if len(compact_items) == 2:
+                return f"{heading} you've got {compact_items[0]}, then {compact_items[1]}."
+            joined = ", ".join(compact_items[:-1]) + f", then {compact_items[-1]}"
+            return f"{heading} you've got {joined}."
+
+        if len(compact_items) == 1:
+            return compact_items[0]
+        if len(compact_items) == 2:
+            return f"{compact_items[0]}, then {compact_items[1]}"
+        return ", ".join(compact_items[:-1]) + f", then {compact_items[-1]}"
+
+    @classmethod
+    def _humanize_timeline_item(cls, item: str, *, heading: str | None) -> str:
+        cleaned = re.sub(r"^\d+\.\s*", "", item).strip()
+        if not cleaned:
+            return ""
+        if " - " in cleaned:
+            title, suffix = cleaned.split(" - ", 1)
+            suffix = suffix.strip()
+            if heading and cls._normalize_text(suffix) == cls._normalize_text(f"for {heading}"):
+                cleaned = title.strip()
+            elif suffix:
+                cleaned = f"{title.strip()} {suffix}"
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" .")
+        return cleaned
 
     @classmethod
     def _sanitize_fallback_text(cls, text: str) -> str:
@@ -799,6 +840,17 @@ class ConversationComposer:
             if len(messages) > 1:
                 return messages[1:]
             return []
+        if brief.response_goal in {"timeline_summary", "answer_question"}:
+            stripped_first = cls._strip_leading_user_echo(first, brief.latest_user_message)
+            if stripped_first != first:
+                stripped_first = stripped_first.strip(" ,.-")
+                if stripped_first and not cls._looks_hard_structured_leak(stripped_first) and not re.match(r"^\d+\.\s+", stripped_first):
+                    messages[0] = stripped_first
+                    first = stripped_first
+                else:
+                    summary = brief.key_facts_to_include[0] if brief.key_facts_to_include else ""
+                    repaired = cls._flatten_static_timeline_summary(summary)
+                    return [repaired] if repaired else []
         if brief.response_goal == "timeline_summary":
             latest = brief.latest_user_message.strip().lower().rstrip("?")
             if latest and first.lower().startswith(latest):
@@ -812,6 +864,23 @@ class ConversationComposer:
             if messages:
                 return messages[:1] if cls._looks_like_timing_shift_reply(brief, messages[0]) else messages
         return messages
+
+    @classmethod
+    def _strip_leading_user_echo(cls, text: str, user_text: str) -> str:
+        candidate = text.strip()
+        normalized_user = cls._normalize_text(user_text)
+        if not candidate or not normalized_user:
+            return candidate
+        user_tokens = normalized_user.split()
+        if len(user_tokens) < 4:
+            return candidate
+        normalized_candidate = cls._normalize_text(candidate)
+        if not normalized_candidate.startswith(normalized_user):
+            return candidate
+        prefix_match = re.match(r"^[^,?.!]+[?.!,:-]\s*", candidate)
+        if prefix_match:
+            return candidate[prefix_match.end() :].lstrip()
+        return ""
 
     @classmethod
     def _drop_scaffolding_preface(cls, messages: list[str]) -> list[str]:
@@ -878,8 +947,15 @@ class ConversationComposer:
         for pattern, replacement in replacements:
             softened = re.sub(pattern, replacement, softened, flags=re.IGNORECASE)
         softened = re.sub(r"\bbet,\s*got it[,.]?\s*", "bet ", softened, flags=re.IGNORECASE)
-        softened = re.sub(r"\bi won't let you forget ([^.?!]+)", r"i'll hit you \1", softened, flags=re.IGNORECASE)
-        softened = re.sub(r"\bmoved that to ([^.?!]+)", r"okay \1", softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\bi won't let you forget ([^.?!]+)", "okay bet, i'll remind you", softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\bi'll hit you ([^.?!]+)", "okay bet, i'll remind you", softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\bmoved that to ([^.?!]+)", "okay bet, i moved it", softened, flags=re.IGNORECASE)
+        softened = re.sub(
+            r"^\s*okay\s+(today|tomorrow|tmr|tonight|later|this weekend|next weekend|monday(?:\s+\w+)?|tuesday(?:\s+\w+)?|wednesday(?:\s+\w+)?|thursday(?:\s+\w+)?|friday(?:\s+\w+)?|saturday(?:\s+\w+)?|sunday(?:\s+\w+)?)\s*$",
+            "okay bet, i moved it",
+            softened,
+            flags=re.IGNORECASE,
+        )
         softened = re.sub(r"\bi deleted ([^.?!]+)", r"i took \1 out", softened, flags=re.IGNORECASE)
         softened = re.sub(r"\bi archived ([^.?!]+)", r"i took \1 out", softened, flags=re.IGNORECASE)
         return re.sub(r"\s{2,}", " ", softened).strip()
@@ -891,7 +967,16 @@ class ConversationComposer:
         if not first_fact:
             return False
         lowered = first_fact.lower()
-        return lowered.startswith(("i'll hit you ", "i'll keep that ", "i'll make sure that doesn't slip", "i got you"))
+        return lowered.startswith(
+            (
+                "i'll hit you ",
+                "i'll keep that ",
+                "i'll make sure that doesn't slip",
+                "i got you",
+                "okay bet, i'll remind you",
+                "okay bet, i'll keep track of it",
+            )
+        )
 
     @staticmethod
     def _looks_like_timing_shift_reply(brief: ReplyBrief, first_fact: str | None) -> bool:

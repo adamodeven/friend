@@ -114,7 +114,7 @@ def test_due_reminders_avoid_burst_and_defer_extra_normal_checkins(tmp_path: Pat
             bio="",
         )
     )
-    now = datetime.now(tz=ZoneInfo(user.timezone))
+    now = datetime(2026, 4, 4, 15, 0, tzinfo=ZoneInfo(user.timezone))
     for i in range(4):
         session.add(
             Reminder(
@@ -136,6 +136,15 @@ def test_due_reminders_avoid_burst_and_defer_extra_normal_checkins(tmp_path: Pat
         "get_or_create_primary_user",
         lambda session: get_user_by_phone(session, "+12488290272"),
     )
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return now.replace(tzinfo=None)
+            return now.astimezone(tz)
+
+    monkeypatch.setattr(worker_tasks, "datetime", _FrozenDateTime)
 
     sent: list[tuple[str, str]] = []
     sid_counter = {"n": 0}

@@ -1208,13 +1208,13 @@ class StateEngine:
     def _reschedule_ack_text(time_phrase: str) -> str:
         phrase = humanize_window_phrase(time_phrase).strip().lower()
         if not phrase:
-            return "okay, changed it"
+            return "okay bet, i moved it"
         if phrase.startswith(("today", "tomorrow", "tmr", "tonight", "this ", "next ")):
-            return f"okay {phrase}"
+            return "okay bet, i moved it"
         weekday_prefixes = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
         if phrase.startswith(weekday_prefixes):
-            return f"okay {phrase}"
-        return f"okay, {phrase}"
+            return "okay bet, i moved it"
+        return f"okay bet, i moved it to {phrase}"
 
     def _refresh_task_block_state(self, task: Task) -> bool:
         unresolved = [link.predecessor_task for link in task.successor_links if link.predecessor_task.status != TaskStatus.completed]
@@ -1459,21 +1459,17 @@ class StateEngine:
         if action_kind == ACTION_KIND_QUICK_ADMIN and time_phrase:
             return self._quick_reminder_fact(time_phrase, is_admin=True)
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
-            return "i got you"
+            return "okay bet, i got you"
         return f"got {task.title}"
 
     @staticmethod
     def _quick_reminder_fact(time_phrase: str, *, is_admin: bool) -> str:
         phrase = humanize_window_phrase(time_phrase).strip().lower()
         if not phrase:
-            return "i got you"
+            return "okay bet, i got you"
         if is_admin:
-            if any(token in phrase for token in ("morning", "afternoon", "evening", "night", "tonight", "weekend", "later")):
-                return f"i'll keep that for {phrase}"
-            return f"i'll keep that on me for {phrase}"
-        if any(token in phrase for token in ("morning", "afternoon", "evening", "night", "tonight", "weekend", "later")):
-            return f"i'll hit you {phrase}"
-        return f"i'll make sure that doesn't slip {phrase}"
+            return "okay bet, i'll keep track of it"
+        return "okay bet, i'll remind you"
 
     @staticmethod
     def _timeline_custom_window(raw_text: str, timezone_name: str) -> tuple[str, datetime, datetime] | None:

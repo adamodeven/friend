@@ -211,7 +211,7 @@ def test_quick_message_windowed_task_does_not_push_fake_prep_step(db_session):
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_push_for_action is False
     assert outcome.suggested_next_step is None
-    assert any("i'll hit you tomorrow morning" in fact.lower() for fact in outcome.key_facts_to_include)
+    assert any("i'll remind you" in fact.lower() for fact in outcome.key_facts_to_include)
 
 
 def test_new_task_links_to_source_message_for_followup_context(db_session):
@@ -302,7 +302,7 @@ def test_time_only_followup_updates_recent_relevant_task_instead_of_creating_new
     assert task.deadline_source_phrase == "monday morning"
     assert task.source_message_id == second_inbound.id
     assert outcome.response_goal == "confirm_update"
-    assert outcome.key_facts_to_include == ["okay monday morning"]
+    assert outcome.key_facts_to_include == ["okay bet, i moved it"]
 
 
 def test_default_next_step_does_not_repeat_submit_for_submit_titles():

@@ -743,8 +743,8 @@ def test_postprocess_repairs_timeline_reply_that_repeats_user_question():
     )
     lowered = " ".join(messages).lower()
     assert not lowered.startswith("what do i have on monday morning")
-    assert "email the scout recruiter" in lowered
-    assert "you've got" in lowered
+    assert "the scout recruiter email" in lowered
+    assert "it's just" in lowered
 
 
 def test_postprocess_repairs_answer_that_starts_by_repeating_user_question():
@@ -760,7 +760,7 @@ def test_postprocess_repairs_answer_that_starts_by_repeating_user_question():
     )
     lowered = " ".join(messages).lower()
     assert not lowered.startswith("what do i have on monday morning")
-    assert "email the scout recruiter" in lowered
+    assert "the scout recruiter email" in lowered
 
 
 def test_timeline_summary_shortcuts_past_llm_question_echo():
@@ -780,7 +780,7 @@ def test_timeline_summary_shortcuts_past_llm_question_echo():
     )
     lowered = " ".join(reply.messages).lower()
     assert not lowered.startswith("what do i have on monday morning")
-    assert "you've got email the scout recruiter" in lowered
+    assert "it's just the scout recruiter email" in lowered
 
 
 def test_timeline_summary_humanizes_title_casing_inside_sentence():
@@ -791,4 +791,17 @@ def test_timeline_summary_humanizes_title_casing_inside_sentence():
         generated_at=datetime.now(),
     )
     messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
-    assert messages.messages == ["monday morning you've got email the scout recruiter."]
+    assert messages.messages == ["monday morning it's just the scout recruiter email."]
+
+
+def test_timeline_summary_empty_window_reads_more_naturally():
+    messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
+        ["what do i have on monday morning, monday morning looks open right now."],
+        ReplyBrief(
+            response_goal="timeline_summary",
+            latest_user_message="what do i have on monday morning",
+            key_facts_to_include=["monday morning"],
+            generated_at=datetime.now(),
+        ),
+    )
+    assert messages == ["monday morning's clear right now"]

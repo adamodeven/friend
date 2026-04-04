@@ -543,20 +543,20 @@ class ConversationComposer:
             items.append(bullet)
 
         if not items:
-            return (f"{heading} looks open right now." if heading else cleaned)
+            return (f"{heading}'s clear right now." if heading else cleaned)
 
         compact_items = [cls._humanize_timeline_item(item, heading=heading) for item in items[:3]]
         compact_items = [item for item in compact_items if item]
         if not compact_items:
-            return f"{heading} looks open right now." if heading else ""
+            return f"{heading}'s clear right now." if heading else ""
 
         if heading:
             if len(compact_items) == 1:
-                return f"{heading} you've got {compact_items[0]}."
+                return f"{heading} it's just {compact_items[0]}."
             if len(compact_items) == 2:
-                return f"{heading} you've got {compact_items[0]}, then {compact_items[1]}."
+                return f"{heading} it's {compact_items[0]}, then {compact_items[1]}."
             joined = ", ".join(compact_items[:-1]) + f", then {compact_items[-1]}"
-            return f"{heading} you've got {joined}."
+            return f"{heading} it's {joined}."
 
         if len(compact_items) == 1:
             return compact_items[0]
@@ -577,6 +577,14 @@ class ConversationComposer:
             elif suffix:
                 cleaned = f"{title.strip()} {suffix}"
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" .")
+        lowered = cleaned.lower()
+        if lowered.startswith("email "):
+            subject = cleaned[6:].strip()
+            cleaned = f"{subject} email" if subject.lower().startswith("the ") else f"the {subject} email"
+        elif lowered.startswith("text "):
+            cleaned = f"texting {cleaned[5:].strip()}"
+        elif lowered.startswith("call "):
+            cleaned = f"calling {cleaned[5:].strip()}"
         if len(cleaned) >= 2 and cleaned[0].isupper() and cleaned[1].islower():
             cleaned = cleaned[0].lower() + cleaned[1:]
         return cleaned
@@ -1007,6 +1015,7 @@ class ConversationComposer:
         )
         softened = re.sub(r"\bi deleted ([^.?!]+)", r"i took \1 out", softened, flags=re.IGNORECASE)
         softened = re.sub(r"\bi archived ([^.?!]+)", r"i took \1 out", softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\b([a-z ]+?) looks open right now\b", r"\1's clear right now", softened, flags=re.IGNORECASE)
         return re.sub(r"\s{2,}", " ", softened).strip()
 
     @staticmethod

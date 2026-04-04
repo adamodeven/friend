@@ -1024,7 +1024,7 @@ class IntentExtractor:
             deadline_text=due_text,
             deadline=parsed,
             confidence=0.68,
-            next_step="send me the actual assignment details when you can and i'll sort it out",
+            next_step=None,
         )
 
     @staticmethod

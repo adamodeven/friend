@@ -722,6 +722,8 @@ def test_assignment_detail_followup_with_due_date_does_not_keep_asking_for_detai
     )
 
     assert second_outcome.should_ask_question is False
+    assert second_outcome.should_push_for_action is False
+    assert second_outcome.suggested_next_step is None
 
 
 def test_repeat_task_mention_reuses_existing_active_task(db_session):

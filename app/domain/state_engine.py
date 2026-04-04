@@ -1445,6 +1445,12 @@ class StateEngine:
         task.extraction_confidence = max(task.extraction_confidence, extracted.confidence)
         if next_step and (task.next_step is None or task.next_step == self._default_next_step(task.title, action_kind=self._task_action_kind(task))):
             task.next_step = next_step
+        if (
+            task.next_step
+            and "send me the assignment details" in task.next_step.lower()
+            and (deadline_source or deadline_at is not None or soft_deadline_at is not None)
+        ):
+            task.next_step = self._default_next_step(extracted.title, action_kind=action_kind)
         if deadline_at is not None:
             task.deadline_at = deadline_at
         if soft_deadline_at is not None:
@@ -1505,6 +1511,8 @@ class StateEngine:
 
         if task.status == TaskStatus.blocked or is_soft_later_phrase(task.deadline_source_phrase):
             return False
+        if self._is_placeholder_assignment_title(task.title):
+            return False
         if start_after is not None and start_after > now:
             return False
 
@@ -1524,6 +1532,8 @@ class StateEngine:
         lowered_title = task.title[0].lower() + task.title[1:] if task.title else "it"
         time_phrase = humanize_window_phrase(task.deadline_source_phrase)
         if self._looks_like_placeholder_assignment([task]):
+            if time_phrase:
+                return f"got it, {lowered_title} is due {time_phrase}"
             return f"looks like a {lowered_title} just landed"
         if action_kind == ACTION_KIND_QUICK_MESSAGE and time_phrase:
             return self._quick_reminder_fact(time_phrase, is_admin=False)

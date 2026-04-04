@@ -319,6 +319,24 @@ def test_leading_time_phrase_before_quick_message_still_extracts_task():
     assert "roommate" in result.task.title.lower()
 
 
+def test_dense_workload_strips_leading_time_framing_from_first_task_title():
+    extractor = IntentExtractor()
+    result = extractor.extract(
+        "this week i need to finish the enclosure cad by tomorrow night, pay rent tonight, send scout followup monday morning, text my roommate tomorrow morning, update my portfolio bullets by wednesday, prep the studio critique board before studio, and book a dentist appointment this weekend",
+        "America/New_York",
+    )
+    assert result.intent == "add_task"
+    assert len(result.tasks) >= 5
+    titles = [task.title.lower() for task in result.tasks]
+    assert titles[0] == "finish the enclosure cad"
+    assert all(not title.startswith("this week i need to") for title in titles)
+    assert "pay rent" in titles
+    assert "send scout followup" in titles
+    assert any("portfolio bullets" in title for title in titles)
+    assert any("studio critique board" in title for title in titles)
+    assert any("dentist appointment" in title for title in titles)
+
+
 def test_pay_rent_tonight_is_quick_admin_not_work_block():
     extractor = IntentExtractor()
     result = extractor.extract("need to pay rent tonight", "America/New_York")

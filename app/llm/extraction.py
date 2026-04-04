@@ -13,7 +13,7 @@ from app.schemas.intent import ExtractedTask, ImageExtractionResult, IntentName,
 class IntentExtractor:
     _TASK_START_PATTERN = (
         r"(?:i\s+)?(?:need to|have to|gotta|must|should|want to|submit|finish|send|write|prepare|study|"
-        r"review|fix|build|make|do|call|email|text|update|work on|start|complete|wrap|clean|buy|plan|"
+        r"review|fix|build|make|do|call|email|text|update|work on|start|complete|wrap|clean|buy|book|plan|prep|"
         r"remind me to|dont let me forget to|don't let me forget to|make sure i|make sure i remember to|"
         r"schedule|reply|apply|pay|draft|upload|design|model|export|print)"
     )
@@ -25,6 +25,14 @@ class IntentExtractor:
         "reply ",
         "submit ",
         "upload ",
+    )
+    _LEADING_TIME_PREFIX_PATTERN = (
+        r"^(?:for\s+)?(?:this week|today|tonight|tomorrow(?: morning| night)?|tmr(?: morning| night)?|"
+        r"this weekend|weekend|later|after class|before studio|"
+        r"monday(?: morning| afternoon| evening| night)?|tuesday(?: morning| afternoon| evening| night)?|"
+        r"wednesday(?: morning| afternoon| evening| night)?|thursday(?: morning| afternoon| evening| night)?|"
+        r"friday(?: morning| afternoon| evening| night)?|saturday(?: morning| afternoon| evening| night)?|"
+        r"sunday(?: morning| afternoon| evening| night)?)\s+"
     )
 
     def __init__(self, adapter: OllamaAdapter | None = None) -> None:
@@ -410,6 +418,7 @@ class IntentExtractor:
     @staticmethod
     def _simple_task_title(text: str) -> str:
         cleaned = re.sub(r"^(yo|hey|ok|okay)\s+", "", text).strip()
+        cleaned = re.sub(IntentExtractor._LEADING_TIME_PREFIX_PATTERN, "", cleaned, flags=re.IGNORECASE)
         cleaned = cleaned.replace("need to ", "").replace("have to ", "")
         cleaned = re.sub(
             r"\b(and then|then|tmr morning|tomorrow morning|tomorrow night|tonight|this weekend|by eod|eod|later|after class|before studio)\b",
@@ -423,6 +432,7 @@ class IntentExtractor:
         cleaned = (title or "").lower().strip()
         cleaned = cleaned.replace("\n", " ")
         cleaned = re.sub(r"^[\"'`]+|[\"'`]+$", "", cleaned)
+        cleaned = re.sub(IntentExtractor._LEADING_TIME_PREFIX_PATTERN, "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"^(yo|hey|ok|okay|alright|also|plus)\s+", "", cleaned)
         cleaned = re.sub(r"^(and then|and|then)\s+", "", cleaned)
         cleaned = re.sub(r"^(i\s+)?(also\s+)?(need to|have to|gotta|want to|should|must)\s+", "", cleaned)
@@ -459,6 +469,7 @@ class IntentExtractor:
             r"\blater\b",
             r"\bafter class\b",
             r"\bbefore studio\b",
+            r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?: morning| afternoon| evening| night)?\b",
         ]
         for pattern in patterns:
             match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -757,17 +768,12 @@ class IntentExtractor:
             return True
         deadline_text = self._extract_deadline_phrase(text)
         return deadline_text is not None and bool(
-            re.search(r"\b(submit|finish|send|prepare|fix|study|write|review|apply|upload|pay|draft|reply|complete|export|print|text|call)\b", candidate),
+            re.search(r"\b(submit|finish|send|prepare|prep|fix|study|write|review|apply|upload|pay|draft|reply|complete|export|print|text|call|book)\b", candidate),
         )
 
     @staticmethod
     def _strip_leading_time_prefix(text: str) -> str:
-        return re.sub(
-            r"^(?:tmr morning|tomorrow morning|tomorrow night|tonight|this weekend|later|after class|before studio)\s+",
-            "",
-            text.strip(),
-            flags=re.IGNORECASE,
-        )
+        return re.sub(IntentExtractor._LEADING_TIME_PREFIX_PATTERN, "", text.strip(), flags=re.IGNORECASE)
 
     @staticmethod
     def _task_requires_time_clarification(task: ExtractedTask) -> bool:
@@ -910,7 +916,7 @@ class IntentExtractor:
             candidate = cue_match.group(2).strip()
         else:
             candidate = working
-            if re.search(r"\b(need to|have to|gotta|must|should|want to|submit|finish|send|write|prepare|study|review|fix|build|make|do|call|email|text|update|work on|start|complete|wrap|clean|buy|plan|schedule|reply|apply|pay|draft|upload|design|model|export|print)\b", working):
+            if re.search(r"\b(need to|have to|gotta|must|should|want to|submit|finish|send|write|prepare|prep|study|review|fix|build|make|do|call|email|text|update|work on|start|complete|wrap|clean|buy|book|plan|schedule|reply|apply|pay|draft|upload|design|model|export|print)\b", working):
                 return None
             if len(re.findall(r"[a-z0-9']+", working)) > 4:
                 return None

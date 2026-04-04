@@ -601,18 +601,16 @@ class ConversationComposer:
         messages: list[str] = []
         if heading:
             if heading in {"today", "tonight", "this week", "weekend"}:
-                messages.append(f"{heading} i'd keep it on {compact_items[0]}.")
+                messages.append(cls._timeline_lead_bubble(heading, compact_items[0]))
                 for item in compact_items[1:]:
                     messages.append(cls._timeline_followup_bubble(item))
                 return messages[:max_chunks]
             if cls._is_time_window_heading(heading):
-                messages.append(
-                    f"{heading} it's just {compact_items[0]}." if len(compact_items) == 1 else f"{heading} it's {compact_items[0]}."
-                )
+                messages.append(cls._timeline_window_lead_bubble(heading, compact_items[0], single=len(compact_items) == 1))
                 for item in compact_items[1:]:
                     messages.append(cls._timeline_followup_bubble(item))
                 return messages[:max_chunks]
-            messages.append(f"for {heading}, the main thing is {compact_items[0]}.")
+            messages.append(cls._timeline_project_lead_bubble(heading, compact_items[0]))
             for item in compact_items[1:]:
                 messages.append(cls._timeline_followup_bubble(item))
             return messages[:max_chunks]
@@ -658,9 +656,15 @@ class ConversationComposer:
     @staticmethod
     def _timeline_followup_bubble(item: str) -> str:
         lowered = item.lower()
+        if any(marker in lowered for marker in ("can wait till", "can just happen", "can happen ")):
+            return f"{item}."
+        if lowered.startswith(("you can just ", "just ")):
+            return f"{item}."
         if lowered.startswith(("the ", "my ", "a ", "an ", "texting ", "calling ")):
             return f"then {item}."
-        if lowered.startswith(("pay ", "finish ", "fix ", "prep ", "clean ", "build ", "write ", "send ", "update ")):
+        if lowered.startswith(("pay ", "finish ", "fix ", "prep ", "clean ", "build ", "write ", "send ", "update ", "text ", "call ", "email ", "reply ")):
+            return f"then just {item}."
+        if lowered.startswith(("i'd ", "we'd ")):
             return f"after that {item}."
         return f"then {item}."
 
@@ -677,24 +681,24 @@ class ConversationComposer:
         if heading:
             if heading in {"today", "tonight", "this week", "weekend"}:
                 if len(compact_items) == 1:
-                    return f"{heading} i'd keep it on {compact_items[0]}."
+                    return cls._timeline_lead_bubble(heading, compact_items[0])
                 if len(compact_items) == 2:
-                    return f"{heading} i'd keep it on {compact_items[0]}. then {compact_items[1]}."
+                    return f"{cls._timeline_lead_bubble(heading, compact_items[0])} {cls._timeline_followup_bubble(compact_items[1])}"
                 joined = ", ".join(compact_items[:-1]) + f", then {compact_items[-1]}"
-                return f"{heading} i'd keep it on {joined}."
+                return f"{heading} i'd stay on {joined}."
             if cls._is_time_window_heading(heading):
                 if len(compact_items) == 1:
-                    return f"{heading} it's just {compact_items[0]}."
+                    return cls._timeline_window_lead_bubble(heading, compact_items[0], single=True)
                 if len(compact_items) == 2:
-                    return f"{heading} it's {compact_items[0]}. then {compact_items[1]}."
+                    return f"{cls._timeline_window_lead_bubble(heading, compact_items[0], single=False)} {cls._timeline_followup_bubble(compact_items[1])}"
                 joined = ", ".join(compact_items[:-1]) + f", then {compact_items[-1]}"
                 return f"{heading} it's {joined}."
             if len(compact_items) == 1:
-                return f"for {heading}, the main thing is {compact_items[0]}."
+                return cls._timeline_project_lead_bubble(heading, compact_items[0])
             if len(compact_items) == 2:
-                return f"for {heading}, i'd keep it on {compact_items[0]}, then {compact_items[1]}."
+                return f"{cls._timeline_project_lead_bubble(heading, compact_items[0])} {cls._timeline_followup_bubble(compact_items[1])}"
             joined = ", ".join(compact_items[:-1]) + f", then {compact_items[-1]}"
-            return f"for {heading}, i'd keep it on {joined}."
+            return f"for {heading} i'd stay on {joined}."
 
         if len(compact_items) == 1:
             return compact_items[0]
@@ -716,27 +720,55 @@ class ConversationComposer:
                 cleaned = title.strip()
             elif suffix.lower().startswith("due "):
                 cleaned = f"{title.strip()} by {suffix[4:].strip()}"
+            elif suffix.lower().startswith("for "):
+                cleaned = f"{title.strip()} {suffix[4:].strip()}"
             elif suffix:
                 cleaned = f"{title.strip()} {suffix}"
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" .")
         lowered = cleaned.lower()
         if lowered.startswith("email "):
             subject = cleaned[6:].strip()
-            cleaned = f"{subject} email" if subject.lower().startswith("the ") else f"the {subject} email"
+            cleaned = f"email {subject}"
         elif lowered.startswith("send "):
             subject = cleaned[5:].strip()
-            if subject and not subject.lower().startswith(("the ", "my ", "a ", "an ")):
-                cleaned = f"the {subject}"
-            elif subject:
-                cleaned = subject
+            cleaned = f"send {subject}" if subject else cleaned
         elif lowered.startswith("text "):
-            cleaned = f"texting {cleaned[5:].strip()}"
+            cleaned = f"text {cleaned[5:].strip()}"
         elif lowered.startswith("call "):
-            cleaned = f"calling {cleaned[5:].strip()}"
+            cleaned = f"call {cleaned[5:].strip()}"
         cleaned = re.sub(r"\bCAD\b", "cad", cleaned)
         if len(cleaned) >= 2 and cleaned[0].isupper() and cleaned[1].islower():
             cleaned = cleaned[0].lower() + cleaned[1:]
         return cleaned
+
+    @staticmethod
+    def _timeline_lead_bubble(heading: str, item: str) -> str:
+        lowered = item.lower()
+        if lowered.startswith(("you can just ",)):
+            return f"{heading} {item}."
+        if any(marker in lowered for marker in ("can wait till", "can just happen", "can happen ")):
+            return f"{heading} {item}."
+        if lowered.startswith(("text ", "call ", "email ", "send ", "reply ", "pay ")):
+            return f"{heading} just {item}."
+        return f"{heading} i'd stay on {item}."
+
+    @staticmethod
+    def _timeline_window_lead_bubble(heading: str, item: str, *, single: bool) -> str:
+        lowered = item.lower()
+        if any(marker in lowered for marker in ("can wait till", "can just happen", "can happen ")):
+            return f"{heading} {item}."
+        if lowered.startswith(("text ", "call ", "email ", "send ", "reply ", "pay ")):
+            return f"{heading} just {item}."
+        if single:
+            return f"{heading} it's just {item}."
+        return f"{heading} it's {item}."
+
+    @staticmethod
+    def _timeline_project_lead_bubble(heading: str, item: str) -> str:
+        lowered = item.lower()
+        if lowered.startswith(("text ", "call ", "email ", "send ", "reply ", "pay ")):
+            return f"for {heading} just {item}."
+        return f"for {heading} i'd start with {item}."
 
     @staticmethod
     def _is_time_window_heading(heading: str) -> bool:

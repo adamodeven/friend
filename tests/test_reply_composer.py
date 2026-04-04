@@ -860,8 +860,8 @@ def test_postprocess_repairs_timeline_reply_that_repeats_user_question():
     )
     lowered = " ".join(messages).lower()
     assert not lowered.startswith("what do i have on monday morning")
-    assert "the scout recruiter email" in lowered
-    assert "it's just" in lowered
+    assert "email the scout recruiter" in lowered
+    assert lowered.startswith("monday morning just")
 
 
 def test_postprocess_repairs_answer_that_starts_by_repeating_user_question():
@@ -877,7 +877,7 @@ def test_postprocess_repairs_answer_that_starts_by_repeating_user_question():
     )
     lowered = " ".join(messages).lower()
     assert not lowered.startswith("what do i have on monday morning")
-    assert "the scout recruiter email" in lowered
+    assert "email the scout recruiter" in lowered
 
 
 def test_timeline_summary_shortcuts_past_llm_question_echo():
@@ -897,7 +897,7 @@ def test_timeline_summary_shortcuts_past_llm_question_echo():
     )
     lowered = " ".join(reply.messages).lower()
     assert not lowered.startswith("what do i have on monday morning")
-    assert "it's just the scout recruiter email" in lowered
+    assert "monday morning just email the scout recruiter" in lowered
 
 
 def test_timeline_summary_humanizes_title_casing_inside_sentence():
@@ -908,7 +908,7 @@ def test_timeline_summary_humanizes_title_casing_inside_sentence():
         generated_at=datetime.now(),
     )
     messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
-    assert messages.messages == ["monday morning it's just the scout recruiter email."]
+    assert messages.messages == ["monday morning just email the scout recruiter."]
 
 
 def test_timeline_summary_uses_more_human_plan_framing_for_tonight():
@@ -920,7 +920,7 @@ def test_timeline_summary_uses_more_human_plan_framing_for_tonight():
     )
     messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
     lowered = " ".join(messages.messages).lower()
-    assert "tonight i'd keep it on" in lowered
+    assert "tonight i'd stay on" in lowered
     assert "finish the enclosure cad" in lowered
     assert "pay rent" in lowered
     assert "due sun" not in lowered
@@ -935,7 +935,7 @@ def test_timeline_summary_uses_by_for_week_view_instead_of_due_labels():
     )
     messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
     lowered = " ".join(messages.messages).lower()
-    assert "this week i'd keep it on" in lowered
+    assert "this week i'd stay on" in lowered
     assert "by sun 4/5" in lowered
     assert "by tue 4/7" in lowered
     assert " due " not in lowered
@@ -980,7 +980,21 @@ def test_timeline_summary_project_view_uses_for_label_not_heading_literal():
         generated_at=datetime.now(),
     )
     messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
-    assert messages.messages == ["for enclosure, the main thing is finish the enclosure cad by sun 4/5."]
+    assert messages.messages == ["for enclosure i'd start with finish the enclosure cad by sun 4/5."]
+
+
+def test_timeline_summary_time_window_uses_human_action_phrase_for_quick_message():
+    brief = ReplyBrief(
+        response_goal="timeline_summary",
+        latest_user_message="what do i have on monday morning",
+        key_facts_to_include=["monday morning\n1. Email the scout recruiter - for monday morning\n2. Text roommate back - for monday morning"],
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
+    assert messages.messages == [
+        "monday morning just email the scout recruiter.",
+        "then just text roommate back.",
+    ]
 
 
 def test_timeline_summary_empty_window_reads_more_naturally():

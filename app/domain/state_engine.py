@@ -337,6 +337,7 @@ class StateEngine:
                     user.id,
                     raw_text,
                     intent.blockers,
+                    timezone_name=user.timezone,
                     time_reference=intent.time_reference,
                     source_message_id=source_message_id,
                 )
@@ -1143,6 +1144,7 @@ class StateEngine:
         raw_text: str,
         blockers: list[str],
         *,
+        timezone_name: str | None = None,
         time_reference: str | None = None,
         source_message_id=None,
     ) -> Task | None:
@@ -1162,6 +1164,8 @@ class StateEngine:
                 user_id=user_id,
                 matched=matched,
                 blockers=blockers,
+                timezone_name=timezone_name,
+                source_message_id=source_message_id,
             )
             if blocker_target is not None:
                 matched = blocker_target
@@ -1547,16 +1551,49 @@ class StateEngine:
         user_id,
         matched: Task,
         blockers: list[str],
+        timezone_name: str | None = None,
+        source_message_id=None,
     ) -> Task | None:
         blocker_text = " ".join(blockers).lower()
         if matched.title.lower() not in blocker_text:
             return matched
-        for task in list_active_tasks(session, user_id):
-            if task.id == matched.id:
-                continue
-            if task.title.lower() in blocker_text:
-                continue
-            return task
+        recent_focus = self._recent_relevant_task(
+            session,
+            user_id=user_id,
+            source_message_id=source_message_id,
+            prefer_windowed=False,
+        )
+        if (
+            recent_focus is not None
+            and recent_focus.id != matched.id
+            and recent_focus.title.lower() not in blocker_text
+            and not self._is_placeholder_assignment_title(recent_focus.title)
+        ):
+            return recent_focus
+
+        candidates = [
+            task
+            for task in list_active_tasks(session, user_id)
+            if task.id != matched.id
+            and task.title.lower() not in blocker_text
+            and not self._is_placeholder_assignment_title(task.title)
+        ]
+        if not candidates:
+            return matched
+
+        if timezone_name:
+            ranked = self._rank_new_tasks(candidates, timezone_name)
+            for _, task in ranked:
+                if self._task_action_kind(task) not in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+                    return task
+            if ranked:
+                return ranked[0][1]
+
+        for task in candidates:
+            if self._task_action_kind(task) not in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+                return task
+        if candidates:
+            return candidates[0]
         return matched
 
     def _should_push_new_task_focus(
@@ -1676,9 +1713,12 @@ class StateEngine:
         action_kind = self._task_action_kind(task)
         deadline_phrase = humanize_window_phrase(task.deadline_source_phrase)
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
-            return f"i'd just knock out {self._quick_task_subject(task.title)} first"
+            quick_action = self._quick_action_phrase(task.title)
+            return f"i'd just {quick_action} first"
         if deadline_phrase in {"tonight", "today"}:
             return f"i'd start with {focus_subject} tonight"
+        if deadline_phrase in {"tomorrow night", "tomorrow"}:
+            return f"i'd start with {focus_subject} now"
         return f"i'd start with {focus_subject}"
 
     def _should_mention_followup_task(self, task: Task, timezone_name: str) -> bool:
@@ -1697,11 +1737,9 @@ class StateEngine:
     def _stack_followup_fact(self, task: Task, timezone_name: str) -> str | None:
         action_kind = self._task_action_kind(task)
         if action_kind == ACTION_KIND_QUICK_ADMIN:
-            subject = self._quick_task_subject(task.title)
-            return f"then just clear {subject}"
+            return self._quick_task_timing_fact(task, timezone_name) or f"then just {self._quick_action_phrase(task.title)}"
         if action_kind == ACTION_KIND_QUICK_MESSAGE:
-            subject = self._quick_task_subject(task.title)
-            return f"then just handle {subject}"
+            return self._quick_task_timing_fact(task, timezone_name) or f"then just {self._quick_action_phrase(task.title)}"
         focus_subject = self._work_task_subject(task.title)
         if not focus_subject:
             return None
@@ -1719,10 +1757,15 @@ class StateEngine:
             and self._normalize_dt(task.start_after, timezone_name) > now
         ]
         if windowed:
+            quick_windowed = [
+                task for task in windowed if self._task_action_kind(task) in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}
+            ]
+            if quick_windowed:
+                return self._quick_task_timing_fact(quick_windowed[0], timezone_name)
             return "the rest can wait for their window"
         quick = [task for task in waiting if self._task_action_kind(task) in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}]
         if quick:
-            return "the smaller stuff can wait till right after"
+            return self._quick_task_timing_fact(quick[0], timezone_name) or "the smaller stuff can wait till right after"
         return None
 
     def _completion_followup_fact(self, task: Task) -> str | None:
@@ -1731,8 +1774,7 @@ class StateEngine:
             return None
         action_kind = self._task_action_kind(task)
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
-            subject = self._quick_task_subject(task.title)
-            return f"if you could also clear {subject} next that'd be huge"
+            return f"if you could also {self._quick_action_phrase(task.title)} next that'd be huge"
         focus_subject = self._work_task_subject(task.title)
         if focus_subject and task.title.lower().startswith("finish "):
             return f"if you could also get {focus_subject} done next that'd be huge"
@@ -1831,6 +1873,15 @@ class StateEngine:
         return lowered
 
     @staticmethod
+    def _quick_action_phrase(title: str) -> str:
+        lowered = title.strip().lower()
+        if not lowered:
+            return "handle it"
+        if lowered.startswith(("text ", "call ", "email ", "send ", "reply ", "dm ", "ping ", "pay ", "book ", "schedule ", "renew ", "cancel ", "buy ")):
+            return lowered
+        return lowered
+
+    @staticmethod
     def _work_task_subject(title: str) -> str:
         lowered = title.strip().lower()
         if not lowered:
@@ -1861,6 +1912,51 @@ class StateEngine:
                     remainder = f"the {remainder}"
                 return remainder
         return lowered
+
+    def _quick_task_timing_fact(self, task: Task, timezone_name: str) -> str | None:
+        phrase = self._task_window_phrase(task, timezone_name)
+        action = self._quick_action_phrase(task.title)
+        if not action:
+            return None
+        if phrase:
+            if phrase in {"today", "tonight"}:
+                return f"{action} can wait till {phrase}"
+            if phrase in {"tomorrow", "tomorrow morning", "tomorrow night", "this weekend"}:
+                return f"you can just {action} {phrase}"
+            if re.match(r"^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+(morning|afternoon|evening|night))?$", phrase):
+                return f"you can just {action} {phrase}"
+            return f"you can just {action} {phrase}"
+        start_after = self._normalize_dt(task.start_after, timezone_name)
+        if start_after is not None:
+            return f"you can just {action} {start_after.astimezone(ZoneInfo(timezone_name)).strftime('%a %-m/%-d %-I:%M%p').lower()}"
+        return None
+
+    def _task_window_phrase(self, task: Task, timezone_name: str) -> str | None:
+        phrase = humanize_window_phrase(task.deadline_source_phrase)
+        if phrase:
+            return phrase
+        moment = self._normalize_dt(task.start_after, timezone_name) or self._normalize_dt(task.deadline_at, timezone_name)
+        if moment is None:
+            return None
+        now = datetime.now(tz=ZoneInfo(timezone_name))
+        moment_local = moment.astimezone(ZoneInfo(timezone_name))
+        if moment_local.date() == now.date():
+            if moment_local.hour >= 17:
+                return "tonight"
+            return "today"
+        tomorrow = (now + timedelta(days=1)).date()
+        if moment_local.date() == tomorrow:
+            if moment_local.hour < 12:
+                return "tomorrow morning"
+            if moment_local.hour >= 17:
+                return "tomorrow night"
+            return "tomorrow"
+        weekday = moment_local.strftime("%A").lower()
+        if moment_local.hour < 12:
+            return f"{weekday} morning"
+        if moment_local.hour >= 17:
+            return f"{weekday} night"
+        return weekday
 
     @staticmethod
     def _record_context_block(session: Session, *, user, raw_text: str, confidence: float) -> ScheduleBlock:

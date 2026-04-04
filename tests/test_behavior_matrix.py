@@ -196,6 +196,46 @@ def test_state_matrix_sequences_mixed_stack_when_one_task_is_clearly_the_real_wo
     )
     assert outcome.should_ask_question is False
     assert any("i'd start with the enclosure cad" in fact.lower() for fact in outcome.key_facts_to_include)
+    assert any(
+        "pay rent can wait till tonight" in fact.lower()
+        or "you can just text roommate back tomorrow morning" in fact.lower()
+        or "text roommate back can happen tomorrow morning" in fact.lower()
+        for fact in outcome.key_facts_to_include
+    )
+
+
+def test_state_matrix_blocker_update_targets_real_work_not_the_named_blocker(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    create_task(
+        db_session,
+        user_id=user.id,
+        title="Fix the website",
+        priority=2,
+    )
+    cad = create_task(
+        db_session,
+        user_id=user.id,
+        title="Finish enclosure CAD",
+        priority=3,
+    )
+    engine = StateEngine()
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="update_task",
+            confidence=0.9,
+            blockers=["fix the website first"],
+            task_updates={"status": "blocked"},
+        ),
+        raw_text="i keep getting distracted because i need to fix the website first",
+    )
+    db_session.flush()
+    assert outcome.response_goal == "replan_blocker"
+    assert any("finish enclosure cad is blocked for now" in fact.lower() for fact in outcome.key_facts_to_include)
+    assert any("real blocker is Fix the website" == fact for fact in outcome.key_facts_to_include)
+    assert cad.status.value == "blocked"
 
 
 def test_state_matrix_placeholder_assignment_without_details_prompts_for_followup(db_session):
@@ -250,6 +290,36 @@ def test_state_matrix_prefers_real_work_over_future_quick_message_in_same_turn(d
     )
     assert outcome.should_push_for_action is True
     assert "enclosure cad" in (outcome.suggested_next_step or "").lower()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "dont let me forget to text my roommate tomorrow morning",
+        "need to pay rent tonight",
+        "finish the enclosure cad by tomorrow night and text my roommate tomorrow morning",
+        "prof just dropped another assignment and i'm in class rn",
+        "what should i do tonight",
+        "what do i have on monday morning",
+        "i keep getting distracted because i need to fix the website first",
+        "just finished the first draft",
+        "my bad i underestimated this",
+        "lmao campus was chaos today",
+    ],
+)
+def test_requirement_matrix_extracts_without_crashing_or_unknown_intent(message: str):
+    extractor = IntentExtractor()
+    result = extractor.extract(message, "America/New_York")
+    assert result.intent in {
+        "add_task",
+        "update_task",
+        "timeline_query",
+        "context_signal",
+        "complete_task",
+        "reflection",
+        "general_chat",
+        "status_query",
+    }
 
 
 def test_timeline_matrix_prefers_real_work_over_future_quick_message(db_session):

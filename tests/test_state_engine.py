@@ -706,7 +706,11 @@ def test_stack_sequence_falls_back_to_human_hold_fact_when_followup_is_future_wi
         ),
         raw_text="finish the enclosure cad by tomorrow night and text my roommate tomorrow morning and send scout followup monday morning",
     )
-    assert any("the rest can wait for their window" == fact for fact in outcome.key_facts_to_include)
+    assert any(
+        "you can just text roommate back tomorrow morning" in fact.lower()
+        or "text roommate back can happen tomorrow morning" in fact.lower()
+        for fact in outcome.key_facts_to_include
+    )
     assert outcome.should_ask_question is False
 
 
@@ -841,7 +845,7 @@ def test_multi_task_add_with_clear_mixed_timing_sequences_without_kicking_back_p
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_ask_question is False
     assert any("i'd start with the enclosure cad" in fact.lower() for fact in outcome.key_facts_to_include)
-    assert any("then just clear rent" in fact.lower() for fact in outcome.key_facts_to_include)
+    assert any("pay rent can wait till tonight" in fact.lower() or "then just pay rent" in fact.lower() for fact in outcome.key_facts_to_include)
     assert not any("deadline coming up" in fact.lower() for fact in outcome.key_facts_to_include)
     assert outcome.should_push_for_action is True
     assert "enclosure cad" in (outcome.suggested_next_step or "").lower()

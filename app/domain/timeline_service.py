@@ -29,7 +29,7 @@ class TimelineService:
         ranked = self._ranked_tasks(session, user_id, timezone, horizon=end)
         if not ranked:
             return "today is clear right now. we can pick one high-impact move."
-        return self._render_plan("today plan", ranked[:5], timezone)
+        return self._render_plan("today", ranked[:5], timezone)
 
     def build_week_view(self, session: Session, user_id, timezone: str) -> str:
         now = datetime.now(tz=ZoneInfo(timezone))
@@ -37,7 +37,7 @@ class TimelineService:
         ranked = self._ranked_tasks(session, user_id, timezone, horizon=end)
         if not ranked:
             return "week is light in the system rn. ping me anything new and i'll slot it."
-        return self._render_plan("this week plan", ranked[:6], timezone)
+        return self._render_plan("this week", ranked[:6], timezone)
 
     def build_tonight_view(self, session: Session, user_id, timezone: str) -> str:
         now = datetime.now(tz=ZoneInfo(timezone))
@@ -45,7 +45,7 @@ class TimelineService:
         ranked = self._ranked_tasks(session, user_id, timezone, horizon=tonight_end)
         if not ranked:
             return "tonight is clear right now."
-        return self._render_plan("tonight plan", ranked[:5], timezone)
+        return self._render_plan("tonight", ranked[:5], timezone)
 
     def build_tomorrow_morning_view(self, session: Session, user_id, timezone: str) -> str:
         now = datetime.now(tz=ZoneInfo(timezone))
@@ -56,7 +56,7 @@ class TimelineService:
         filtered = [rank for rank in ranked if self._is_due_between(rank.task, start, end) or self._starts_between(rank.task, start, end) or rank.unlocks]
         if not filtered:
             return "tomorrow morning is open in the system right now."
-        return self._render_plan("tomorrow morning plan", filtered[:5], timezone)
+        return self._render_plan("tomorrow morning", filtered[:5], timezone)
 
     def build_weekend_view(self, session: Session, user_id, timezone: str) -> str:
         now = datetime.now(tz=ZoneInfo(timezone))
@@ -68,7 +68,7 @@ class TimelineService:
         filtered = [rank for rank in ranked if self._is_due_between(rank.task, saturday, sunday_end) or rank.unlocks]
         if not filtered:
             return "weekend is clear in the system right now."
-        return self._render_plan("weekend plan", filtered[:5], timezone)
+        return self._render_plan("weekend", filtered[:5], timezone)
 
     def build_project_view(self, session: Session, user_id, timezone: str, raw_text: str) -> str:
         ranked = self._ranked_tasks(session, user_id, timezone, horizon=datetime.now(tz=ZoneInfo(timezone)) + timedelta(days=14))
@@ -101,7 +101,7 @@ class TimelineService:
         label = re.sub(r"^(the|my|a|an)\s+", "", project_phrase, flags=re.IGNORECASE)
         label = re.sub(r"\s+project$", "", label, flags=re.IGNORECASE)
         label = label[:60].strip() or "project"
-        return self._render_plan(f"{label} plan", [rank for _, rank in matches[:5]], timezone)
+        return self._render_plan(label, [rank for _, rank in matches[:5]], timezone)
 
     def next_hour_recommendation(self, session: Session, user_id, timezone: str) -> str:
         ranked = self._ranked_tasks(session, user_id, timezone, horizon=datetime.now(tz=ZoneInfo(timezone)) + timedelta(hours=8))
@@ -110,12 +110,12 @@ class TimelineService:
         top = ranked[0]
         move = top.task.next_step or self._default_move_text(top.task.title)
         if top.unlocks:
-            return f"next hour move: {move}. that unlocks {top.unlocks[0]}."
+            return f"for the next hour, {move}. that clears the way for {top.unlocks[0]}."
         if top.blocked_by:
-            return f"next hour move: clear {top.blocked_by[0]} first so {top.task.title} can move."
+            return f"for the next hour, clear {top.blocked_by[0]} first so {top.task.title} can move."
         if top.due_label:
-            return f"next hour move: {move}. keep it tight because it's due {top.due_label}."
-        return f"next hour move: {move}."
+            return f"for the next hour, {move}. keep it tight because it's due {top.due_label}."
+        return f"for the next hour, {move}."
 
     def recommend_next_task(self, session: Session, user_id, timezone: str) -> Task | None:
         ranked = self._ranked_tasks(session, user_id, timezone, horizon=datetime.now(tz=ZoneInfo(timezone)) + timedelta(days=7))
@@ -252,7 +252,7 @@ class TimelineService:
 
     @staticmethod
     def _render_plan(label: str, ranked: list[RankedTask], timezone: str) -> str:
-        lines = [f"{label}:"]
+        lines = [label]
         for index, rank in enumerate(ranked, start=1):
             bits: list[str] = []
             if rank.due_label:
@@ -266,7 +266,7 @@ class TimelineService:
             if not rank.actionable and rank.blocked_by:
                 bits.append(f"blocked by {rank.blocked_by[0]}")
             elif rank.task.status == TaskStatus.blocked and rank.task.blocked_reason:
-                bits.append(f"blocked: {rank.task.blocked_reason[:48]}")
+                bits.append(f"blocked by {rank.task.blocked_reason[:48]}")
             line = f"{index}. {rank.task.title}"
             if bits:
                 line = f"{line} - {', '.join(bits)}"

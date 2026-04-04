@@ -176,7 +176,7 @@ def test_ingestion_confirmation_clears_unrelated_task_context(db_session):
             response_goal="ingestion_confirmation",
             key_facts_to_include=["screenshot saved, but the concrete task pull was low-confidence"],
             should_ask_question=True,
-            question_if_needed="what should i pull out from that screenshot?",
+            question_if_needed="what do you want me to grab from that screenshot?",
         ),
     )
 

@@ -90,10 +90,10 @@ class StateEngine:
 
             if len(bundle.root_tasks) == 1:
                 task = bundle.root_tasks[0]
-                outcome.key_facts_to_include.append(f"got {task.title} on the board")
+                outcome.key_facts_to_include.append(f"got {task.title}")
             else:
                 outcome.key_facts_to_include.append(f"got {len(bundle.root_tasks)} things from that text")
-                outcome.key_facts_to_include.append("on deck: " + ", ".join(task.title for task in bundle.root_tasks[:3]))
+                outcome.key_facts_to_include.append("right now i'm tracking " + ", ".join(task.title for task in bundle.root_tasks[:3]))
             if bundle.subtask_count:
                 outcome.key_facts_to_include.append(f"split out {bundle.subtask_count} smaller steps")
             if bundle.dependency_count:
@@ -163,6 +163,9 @@ class StateEngine:
             ):
                 outcome.should_ask_question = True
                 outcome.question_if_needed = "want me to break that into 2 quick checkpoints?"
+            elif len(bundle.root_tasks) >= 3 and self._should_ask_load_prioritization_question(bundle.root_tasks):
+                outcome.should_ask_question = True
+                outcome.question_if_needed = "which one of those blows up the hardest if it slips?"
             else:
                 outcome.should_ask_question = False
                 outcome.question_if_needed = None
@@ -180,15 +183,16 @@ class StateEngine:
                 mark_task_complete(matched)
                 unlocked = self._refresh_successors(matched)
                 session.flush()
-                outcome.key_facts_to_include.append(f"marked complete: {matched.title}")
+                outcome.key_facts_to_include.append(f"{matched.title} is done")
                 if unlocked:
-                    outcome.key_facts_to_include.append(f"unblocked: {unlocked[0].title}")
+                    outcome.key_facts_to_include.append(f"that clears {unlocked[0].title}")
                     outcome.mention_dependency = True
                 next_task = self.timeline.recommend_next_task(session, user.id, user.timezone)
                 if next_task:
-                    outcome.key_facts_to_include.append(f"next likely focus: {next_task.title}")
+                    outcome.key_facts_to_include.append(f"after that, {next_task.title} is the big thing left")
                     outcome.suggested_next_step = self._next_step_for_task(next_task)
                     outcome.should_push_for_action = True
+                    outcome.should_ask_question = False
             else:
                 outcome.key_facts_to_include.append("completion noted, but task match was uncertain")
                 outcome.should_ask_question = True
@@ -261,7 +265,7 @@ class StateEngine:
                 archived_count = self._clear_active_tasks(session, user.id)
                 outcome.response_goal = "confirm_update"
                 outcome.emotional_tone = "direct"
-                outcome.key_facts_to_include.append(f"cleared the board ({archived_count} archived)")
+                outcome.key_facts_to_include.append(f"cleared everything out ({archived_count} archived)")
                 outcome.should_push_for_action = archived_count == 0
                 if archived_count == 0:
                     outcome.suggested_next_step = "drop the next task you want tracked"
@@ -275,9 +279,9 @@ class StateEngine:
                     if action == "archive":
                         archived_count = self._archive_task_and_skip_pending_reminders(session, matched)
                         session.flush()
-                        outcome.key_facts_to_include.append(f"took {matched.title} off the board")
+                        outcome.key_facts_to_include.append(f"{matched.title} is out")
                         if archived_count > 1:
-                            outcome.key_facts_to_include.append(f"that also cleared {archived_count - 1} linked subtasks")
+                            outcome.key_facts_to_include.append(f"that also clears {archived_count - 1} linked subtasks")
                         applied_change = True
                     if intent.time_reference:
                         parsed, conf = parse_human_time(intent.time_reference, timezone=user.timezone)
@@ -908,6 +912,13 @@ class StateEngine:
         if len(task_title.split()) >= 12:
             return True
         return False
+
+    @staticmethod
+    def _should_ask_load_prioritization_question(tasks: list[Task]) -> bool:
+        if len(tasks) < 3:
+            return False
+        timed = sum(1 for task in tasks if task.deadline_at is not None or task.start_after is not None)
+        return timed <= 1
 
     @staticmethod
     def _time_clarification_question(*, task_title: str, time_reference: str) -> str:

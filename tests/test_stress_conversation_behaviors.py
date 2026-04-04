@@ -30,13 +30,13 @@ class _StressAdapter:
 
         lowered = user.lower()
         if "reply goal: acknowledge_new_task" in lowered:
-            return "captured. next move: do a focused first pass now and text me when it's done."
+            return "bet, got it. i'd start with a focused first pass now and text me when it's done."
         if "reply goal: answer_question" in lowered:
             return "yep, this is live and i got your message."
         if "reply goal: timeline_summary" in lowered:
-            return "for tonight: hit the nearest deadline first, then clean up the next blocker."
+            return "for tonight, hit the nearest deadline first, then clean up the next blocker."
         if "short checkin: yes" in lowered:
-            return "yo i'm here. what's the move right now?"
+            return "yo i'm here."
         return "got you. we can lock the next move now."
 
 

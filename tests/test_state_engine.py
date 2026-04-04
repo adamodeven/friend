@@ -237,7 +237,7 @@ def test_bulk_clear_archives_active_tasks_and_pending_reminders(db_session):
     assert reminder is not None
     assert reminder.status == ReminderStatus.skipped
     assert outcome.response_goal == "confirm_update"
-    assert any("cleared the board" in fact for fact in outcome.key_facts_to_include)
+    assert any("cleared everything out" in fact for fact in outcome.key_facts_to_include)
 
 
 def test_timeline_query_tomorrow_morning_routes_to_specific_window(db_session):
@@ -272,7 +272,7 @@ def test_project_plan_query_returns_project_view_without_creating_task(db_sessio
 
     assert outcome.response_goal == "timeline_summary"
     summary = " ".join(outcome.key_facts_to_include).lower()
-    assert "enclosure plan" in summary
+    assert "enclosure" in summary
     assert "finish the cad for the enclosure" in summary
     assert "captured:" not in summary
 
@@ -362,7 +362,7 @@ def test_archive_task_action_really_archives_task_and_skips_reminders(db_session
     assert refreshed_blocked is not None
     assert refreshed_blocked.status == TaskStatus.active
     assert reminder.status == ReminderStatus.skipped
-    assert any(fact == "took Fix website off the board" for fact in outcome.key_facts_to_include)
+    assert any(fact == "Fix website is out" for fact in outcome.key_facts_to_include)
     assert outcome.should_ask_question is False
 
 
@@ -420,8 +420,34 @@ def test_complete_task_unblocks_successor_and_surfaces_next_action(db_session):
 
     refreshed_successor = db_session.execute(select(Task).where(Task.id == successor.id)).scalars().one()
     assert refreshed_successor.status == TaskStatus.active
-    assert any("unblocked: Send recruiter email" == fact for fact in outcome.key_facts_to_include)
+    assert any("that clears Send recruiter email" == fact for fact in outcome.key_facts_to_include)
     assert "send recruiter email" in (outcome.suggested_next_step or "").lower()
+
+
+def test_multi_task_add_with_limited_timing_asks_one_prioritization_question(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+    intent = IntentResult(
+        intent="add_task",
+        confidence=0.91,
+        tasks=[
+            ExtractedTask(title="Clean up portfolio bullets"),
+            ExtractedTask(title="Pay rent"),
+            ExtractedTask(title="Check in with team lead"),
+        ],
+    )
+
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="tonight i need to clean up portfolio bullets, pay rent, and check in with my team lead",
+    )
+
+    assert outcome.response_goal == "acknowledge_new_task"
+    assert outcome.should_ask_question is True
+    assert outcome.question_if_needed == "which one of those blows up the hardest if it slips?"
 
 
 def test_reflection_records_slip_reason_on_task_and_memory(db_session):

@@ -216,13 +216,13 @@ class ConversationManager:
             if len(effects.tasks) == 1:
                 task = effects.tasks[0]
                 due = self._format_due(task.deadline_at, user.timezone) or task.deadline_source_phrase or "no deadline seen"
-                state_outcome.key_facts_to_include.append(f"screenshot captured task: {task.title}")
-                state_outcome.key_facts_to_include.append(f"screenshot due context: {due}")
+                state_outcome.key_facts_to_include.append(f"from the screenshot i pulled {task.title}")
+                state_outcome.key_facts_to_include.append(f"due read looks like {due}")
                 if effects.reminder_labels:
                     state_outcome.key_facts_to_include.append(f"check-in scheduled around {effects.reminder_labels[0]}")
             else:
-                state_outcome.key_facts_to_include.append(f"screenshot captured {len(effects.tasks)} tasks")
-                state_outcome.key_facts_to_include.append("from image: " + ", ".join(titles))
+                state_outcome.key_facts_to_include.append(f"from the screenshot i pulled {len(effects.tasks)} tasks")
+                state_outcome.key_facts_to_include.append("looks like " + ", ".join(titles))
 
             if any(task.deadline_at or task.deadline_source_phrase for task in effects.tasks):
                 state_outcome.mention_deadline = True
@@ -262,7 +262,7 @@ class ConversationManager:
             state_outcome.key_facts_to_include.append("screenshot saved, but the concrete task pull was low-confidence")
             if not state_outcome.should_ask_question:
                 state_outcome.should_ask_question = True
-                state_outcome.question_if_needed = "what should i pull out from that screenshot?"
+                state_outcome.question_if_needed = "what do you want me to grab from that screenshot?"
 
     def _timeline_summary_for_text(self, session: Session, *, user_id, timezone: str, raw_text: str) -> str:
         lowered = raw_text.lower()
@@ -284,12 +284,12 @@ class ConversationManager:
         return any(
             token in lowered
             for token in (
-                "today plan",
-                "tonight plan",
-                "tomorrow morning plan",
-                "this week plan",
-                "weekend plan",
-                "next hour move",
+                "today\n",
+                "tonight\n",
+                "tomorrow morning\n",
+                "this week\n",
+                "weekend\n",
+                "for the next hour",
             )
         )
 

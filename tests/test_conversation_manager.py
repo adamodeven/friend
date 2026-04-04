@@ -146,7 +146,7 @@ def test_attachment_task_sets_ingestion_goal_and_schedules_reminder(db_session):
     assert result.outgoing_messages
     assert composer.last_brief is not None
     assert composer.last_brief.response_goal == "ingestion_confirmation"
-    assert any("screenshot captured task: Prepare studio board" in fact for fact in composer.last_brief.key_facts_to_include)
+    assert any("from the screenshot i pulled Prepare studio board" in fact for fact in composer.last_brief.key_facts_to_include)
     task = db_session.execute(select(Task).where(Task.title == "Prepare studio board")).scalars().first()
     assert task is not None
     reminder = db_session.execute(select(Reminder).where(Reminder.task_id == task.id)).scalars().first()

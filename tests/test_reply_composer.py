@@ -58,11 +58,13 @@ class FakeAdapter:
         # Simulate second-attempt regeneration by returning a clean default when queue is exhausted.
         lowered_user = user.lower()
         if "reply goal: acknowledge_new_task" in lowered_user:
-            return "locked in. captured it. if you touch it next, start with a focused first pass."
+            return "locked in. got it. if you touch it next, i'd start with a focused first pass."
         if "reply goal: answer_question" in lowered_user:
             return "yep, these are live-generated responses right now."
         if "short checkin: yes" in lowered_user:
             return "yo i'm here."
+        if "reply goal: react_to_progress" in lowered_user:
+            return "bet. that clears it. if you could also wrap the cad pass next, that'd be huge."
         return "yeah, i'm live and tracking this."
 
 
@@ -337,7 +339,7 @@ def test_acknowledge_new_task_repair_requires_capture_or_next_move_markers():
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
     lowered = " ".join(reply.messages).lower()
-    assert "next move:" in lowered or "got it" in lowered or "locked in" in lowered or "captured" in lowered
+    assert "got it" in lowered or "locked in" in lowered or "tracking" in lowered or "i'd start with" in lowered
 
 
 def test_acknowledge_new_task_repairs_conjunction_lead_and_submit_duplication():
@@ -356,7 +358,7 @@ def test_acknowledge_new_task_repairs_conjunction_lead_and_submit_duplication():
     lowered = " ".join(reply.messages).lower()
     assert lowered.startswith("and ") is False
     assert "submit i submit" not in lowered
-    assert "next move:" in lowered or "captured" in lowered
+    assert "got it" in lowered or "i'd start with" in lowered or "tracking" in lowered
 
 
 def test_confirm_update_repairs_generic_support_bot_phrase():
@@ -399,7 +401,8 @@ def test_acknowledge_new_task_repairs_repeated_next_move_clause():
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
     lowered = " ".join(reply.messages).lower()
-    assert lowered.count("next move:") <= 1
+    assert "next move:" not in lowered
+    assert "i'd start with" in lowered or "start with" in lowered
 
 
 def test_composer_repairs_when_output_leaks_instructional_phrase():
@@ -545,3 +548,37 @@ def test_composer_regenerates_when_reply_is_long_and_does_not_narrow_to_one_move
     lowered = " ".join(reply.messages).lower()
     assert "start with the statics sheet" in lowered
     assert len(lowered.split()) <= 20
+
+
+def test_postprocess_softens_label_style_colons():
+    adapter = FakeAdapter([], enabled=True, json_responses=[{"messages": ["next up: finish the enclosure cad", "for tonight: fix the blocker first"]}])
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="timeline_summary",
+            latest_user_message="what should i do tonight",
+            generated_at=datetime.now(),
+        )
+    )
+    lowered = " ".join(reply.messages).lower()
+    assert "next up:" not in lowered
+    assert "for tonight:" not in lowered
+    assert "and after that" in lowered or "for tonight," in lowered
+
+
+def test_react_to_progress_fallback_hands_off_like_a_person():
+    adapter = FakeAdapter([], enabled=False)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="react_to_progress",
+            latest_user_message="nice, website fix is done",
+            key_facts_to_include=["website fix is done"],
+            suggested_next_step="get the enclosure cad finished",
+            generated_at=datetime.now(),
+        )
+    )
+    lowered = " ".join(reply.messages).lower()
+    assert "next up:" not in lowered
+    assert "website fix is done" in lowered
+    assert "that'd be huge" in lowered or "if you could also" in lowered

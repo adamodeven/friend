@@ -20,7 +20,7 @@ def test_today_view_orders_plan_when_no_due_tasks(db_session):
     service = TimelineService()
     text = service.build_today_view(db_session, user.id, user.timezone)
     lowered = text.lower()
-    assert "today plan" in lowered
+    assert "today" in lowered
     assert "1. website polish" in lowered
 
 
@@ -70,7 +70,7 @@ def test_tomorrow_morning_view_lists_due_items_in_window(db_session):
     service = TimelineService()
     text = service.build_tomorrow_morning_view(db_session, user.id, user.timezone)
     lowered = text.lower()
-    assert "tomorrow morning plan" in lowered
+    assert "tomorrow morning" in lowered
     assert "submit scout app" in lowered
 
 
@@ -137,7 +137,7 @@ def test_week_view_orders_unlocking_work_ahead_of_lower_value_items(db_session):
     text = service.build_week_view(db_session, user.id, user.timezone)
     lowered = text.lower()
 
-    assert "this week plan" in lowered
+    assert "this week" in lowered
     assert lowered.index("finalize resume pdf") < lowered.index("read design article")
 
 
@@ -170,9 +170,9 @@ def test_next_hour_recommendation_prefers_unlocking_move(db_session):
     text = service.next_hour_recommendation(db_session, user.id, user.timezone)
     lowered = text.lower()
 
-    assert lowered.startswith("next hour move:")
+    assert lowered.startswith("for the next hour,")
     assert "fix website" in lowered
-    assert "unlocks submit application" in lowered
+    assert "clears the way for submit application" in lowered
 
 
 def test_weekend_view_handles_empty_case(db_session):
@@ -194,6 +194,79 @@ def test_project_view_filters_to_matching_tasks(db_session):
     service = TimelineService()
     text = service.build_project_view(db_session, user.id, user.timezone, "what's the plan for the enclosure project?")
     lowered = text.lower()
-    assert "enclosure plan" in lowered
+    assert "enclosure" in lowered
     assert "finish the cad for the enclosure" in lowered
     assert "laundry" not in lowered
+
+
+def test_today_view_prioritizes_crowded_mixed_workload_by_unlocks_windows_and_deadlines(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    tz = ZoneInfo(user.timezone)
+    now = datetime.now(tz=tz)
+    tomorrow_morning = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+
+    website = create_task(db_session, user_id=user.id, title="Fix portfolio website", priority=4, next_step="ship the broken homepage fixes")
+    recruiter = create_task(
+        db_session,
+        user_id=user.id,
+        title="Send recruiter email",
+        priority=5,
+        deadline_at=now + timedelta(hours=6),
+        blocked_reason="need website fixed first",
+        next_step="send the recruiter update once the site is clean",
+    )
+    recruiter.status = TaskStatus.blocked
+    create_task_dependency(
+        db_session,
+        user_id=user.id,
+        predecessor_task_id=website.id,
+        successor_task_id=recruiter.id,
+    )
+
+    rent = create_task(
+        db_session,
+        user_id=user.id,
+        title="Pay rent",
+        priority=5,
+        deadline_at=now + timedelta(hours=4),
+        next_step="send the rent transfer",
+    )
+    cad = create_task(
+        db_session,
+        user_id=user.id,
+        title="Finish enclosure CAD",
+        priority=4,
+        deadline_at=(now + timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0),
+        next_step="finish the first clean enclosure pass",
+    )
+    roommate = create_task(
+        db_session,
+        user_id=user.id,
+        title="Text roommate back",
+        priority=3,
+        deadline_at=(now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0),
+        start_after=tomorrow_morning,
+        next_step="send the roommate text in the morning",
+    )
+    reading = create_task(
+        db_session,
+        user_id=user.id,
+        title="Read design article",
+        priority=1,
+        deadline_at=now + timedelta(days=3),
+    )
+    db_session.commit()
+
+    service = TimelineService()
+    today = service.build_today_view(db_session, user.id, user.timezone).lower()
+    tomorrow = service.build_tomorrow_morning_view(db_session, user.id, user.timezone).lower()
+    recommended = service.recommend_next_task(db_session, user.id, user.timezone)
+
+    assert recommended is not None
+    assert recommended.id in {rent.id, website.id}
+    assert today.index("pay rent") < today.index("finish enclosure cad")
+    assert today.index("fix portfolio website") < today.index("read design article")
+    assert "unlocks send recruiter email" in today
+    assert "text roommate back" in tomorrow
+    assert "finish enclosure cad" not in tomorrow

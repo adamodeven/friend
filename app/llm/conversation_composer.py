@@ -211,12 +211,14 @@ class ConversationComposer:
             "When the user is vague, overwhelmed, or slipping, narrow it to one concrete next move. "
             "Urgency should sound calm and real, never corny, fake inspirational, or hypey. "
             "Avoid stiff database-y verbs like archived, captured, or logged unless the user used that language first. "
-            "Prefer natural phrasing like bet, got it, took that off the board, good looks, or we're good there when it fits. "
+            "Prefer natural phrasing like bet, got it, good looks, we're good there, or that clears it when it fits. "
             "If user asks what you do or whether replies are canned/live, answer directly in plain language first. "
             "If latest user message is a short greeting/check-in, keep it present-tense and lightweight. "
             "Do not drag in old thread drama unless the user asked about it in this message. "
             "For small-talk or quick checks, do not mirror the user's exact words back. "
             "Do not keep asking the user to hand you another task unless the message clearly calls for it. "
+            "Do not use label-style colons like next up: or next move:, unless it's a real clock time. "
+            "When you bring up what comes after progress, make it feel like a fresh thought instead of a task-manager label. "
             "Never start your first bubble with the same 4+ word sequence the user just sent. "
             "No em dashes, no semicolons, no markdown, no labels, no numbering. "
             "Answer what the user actually said, in context, and keep momentum. "
@@ -239,6 +241,7 @@ class ConversationComposer:
             "Output valid JSON only with this exact schema: {\"messages\": [\"bubble 1\", \"bubble 2\"]}. "
             "messages must contain 1 to 3 short text bubbles, each natural and human. "
             "No markdown, no numbering, no bullet points, no labels, no em dash, no semicolons. "
+            "Do not use label-style colons like next up: or next move:, unless it's a real clock time. "
             "Default to one short bubble unless extra separation clearly improves clarity. "
             "For casual, off-topic, or meta texts, answer socially first and do not force a task pivot. "
             "If the user is vague or overloaded, reduce cognitive load by choosing one next move. "
@@ -290,18 +293,18 @@ class ConversationComposer:
                 f"- push to one next move: {push_for_action}\n"
                 f"- ask brief follow-up only if needed: {ask_question}\n"
                 f"- short checkin: {short_checkin}\n"
-                f"- facts: {'; '.join(key_facts)}\n"
+                f"- facts: {' | '.join(key_facts)}\n"
                 f"- next step: {next_step}\n"
                 f"- question: {question}\n"
                 f"- recent thread: {' | '.join(recent_thread)}\n"
-                f"- active tasks: {'; '.join(tasks)}\n"
-                f"- deadlines: {'; '.join(deadlines)}\n"
-                f"- state flags: {'; '.join(flags)}\n"
-                f"- memory notes: {'; '.join(notes)}\n"
-                f"- style rules: {'; '.join(style_rules)}\n"
-                f"- avoid topics: {'; '.join(avoid_topics)}\n"
-                f"- avoid repeated openers: {'; '.join(avoid)}\n"
-                f"- avoid these quality issues: {'; '.join(errors)}\n"
+                f"- active tasks: {' | '.join(tasks)}\n"
+                f"- deadlines: {' | '.join(deadlines)}\n"
+                f"- state flags: {' | '.join(flags)}\n"
+                f"- memory notes: {' | '.join(notes)}\n"
+                f"- style rules: {' | '.join(style_rules)}\n"
+                f"- avoid topics: {' | '.join(avoid_topics)}\n"
+                f"- avoid repeated openers: {' | '.join(avoid)}\n"
+                f"- avoid these quality issues: {' | '.join(errors)}\n"
                 f"- max chunks: {brief.max_chunks}\n"
                 f"- max chunk length: {brief.max_chunk_length}\n"
                 "Write the actual user-facing reply only. 1-3 short text bubbles."
@@ -340,6 +343,8 @@ class ConversationComposer:
             "- if this is an answer_question goal, first bubble must be a direct answer statement\n"
             "- keep it human and text-like\n"
             "- no semicolons in the user-facing reply\n"
+            "- no label-style colons like next up: or next move: unless it's a real clock time\n"
+            "- if progress just happened, bring up what comes next like a fresh thought, not a label\n"
             "- never expose internal system labels\n"
         )
         return payload
@@ -391,13 +396,19 @@ class ConversationComposer:
             summary = brief.key_facts_to_include[0] if brief.key_facts_to_include else "no hard due items right now."
             base = self._flatten_timeline_summary(summary) or "no hard due items right now."
         elif brief.response_goal == "acknowledge_new_task":
-            first_fact = first_fact or "task captured."
+            first_fact = first_fact or "got it."
             if brief.should_ask_question and brief.question_if_needed:
                 base = f"bet, got it. {first_fact} {brief.question_if_needed}"
             elif brief.suggested_next_step:
-                base = f"bet, got it. {first_fact} if you touch it next, start with {brief.suggested_next_step}"
+                base = f"bet, got it. {first_fact} if you touch it next, i'd start with {brief.suggested_next_step}"
             else:
                 base = f"bet, got it. {first_fact}"
+        elif brief.response_goal == "react_to_progress":
+            fact = first_fact or "good looks, that clears it."
+            if brief.suggested_next_step:
+                base = f"{fact} if you could also {brief.suggested_next_step} next, that'd be huge."
+            else:
+                base = fact
         elif brief.response_goal == "replan_blocker":
             if brief.question_if_needed:
                 base = f"got it, that shifts the plan. {brief.question_if_needed}"
@@ -455,7 +466,7 @@ class ConversationComposer:
 
         compact_items = ", ".join(items[:3]).strip()
         if heading:
-            return f"{heading}: {compact_items}"
+            return f"{heading}, {compact_items}"
         return compact_items
 
     @classmethod
@@ -744,6 +755,7 @@ class ConversationComposer:
             return messages
         messages = [cls._strip_wrapping_quotes(cls._clean_candidate_text(m)) for m in messages]
         messages = [m.replace(";", ",") for m in messages]
+        messages = [cls._soften_label_colons(m) for m in messages]
         messages = cls._drop_scaffolding_preface(messages)
         messages = [m for m in messages if m and not cls._is_scaffolding_preface(m) and not cls._looks_hard_structured_leak(m)]
         if not messages:
@@ -788,6 +800,27 @@ class ConversationComposer:
         if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {'"', "'"}:
             return stripped[1:-1].strip()
         return stripped
+
+    @staticmethod
+    def _soften_label_colons(text: str) -> str:
+        softened = text
+        replacements = (
+            (r"\bnext up:\s*", "and after that "),
+            (r"\bnext move:\s*", "i'd start with "),
+            (r"\bfor today:\s*", "for today, "),
+            (r"\bfor tonight:\s*", "for tonight, "),
+            (r"\bfor tomorrow morning:\s*", "for tomorrow morning, "),
+            (r"\bfor tomorrow:\s*", "for tomorrow, "),
+            (r"\bfor this week:\s*", "for this week, "),
+            (r"\btoday plan:\s*", "today\n"),
+            (r"\btonight plan:\s*", "tonight\n"),
+            (r"\btomorrow morning plan:\s*", "tomorrow morning\n"),
+            (r"\bthis week plan:\s*", "this week\n"),
+            (r"\bweekend plan:\s*", "weekend\n"),
+        )
+        for pattern, replacement in replacements:
+            softened = re.sub(pattern, replacement, softened, flags=re.IGNORECASE)
+        return re.sub(r"\s{2,}", " ", softened).strip()
 
     @staticmethod
     def _clean_candidate_text(text: str) -> str:
@@ -890,7 +923,20 @@ class ConversationComposer:
             return True
 
         if brief.response_goal == "acknowledge_new_task":
-            if not any(marker in combined for marker in ("got it", "bet", "locked in", "captured", "added", "noted", "on the board", "on deck", "start with")):
+            if not any(
+                marker in combined
+                for marker in (
+                    "got it",
+                    "bet",
+                    "locked in",
+                    "added",
+                    "noted",
+                    "tracking",
+                    "right now i'm tracking",
+                    "start with",
+                    "i'd start with",
+                )
+            ):
                 return True
             if "what's on your mind?" in combined:
                 return True
@@ -900,15 +946,30 @@ class ConversationComposer:
                 return True
             if re.search(r"\bsubmit\s+i\s+submit\b", combined):
                 return True
-            if brief.should_push_for_action and brief.suggested_next_step and not any(marker in combined for marker in ("next move", "start with", "touch it next")):
+            if brief.should_push_for_action and brief.suggested_next_step and not any(
+                marker in combined for marker in ("start with", "touch it next", "i'd start with", "if you could", "if you can")
+            ):
                 return True
-            if not any(marker in combined for marker in ("captured", "on the board", "on deck", "start with", "got it", "bet")):
+            if not any(
+                marker in combined
+                for marker in ("tracking", "right now i'm tracking", "start with", "i'd start with", "got it", "bet", "locked in")
+            ):
                 return True
 
         if brief.response_goal == "confirm_update":
-            if not any(marker in combined for marker in ("updated", "cleared", "noted", "applied", "archived", "done", "marked", "bet", "off the board", "dropped", "took")):
+            if not any(
+                marker in combined
+                for marker in ("updated", "cleared", "noted", "applied", "done", "marked", "bet", "dropped", "took", "we're good", "is out", "clears it")
+            ):
                 return True
             if "under control" in combined:
+                return True
+
+        if brief.response_goal == "react_to_progress":
+            if not any(
+                marker in combined
+                for marker in ("done", "good looks", "nice", "bet", "that clears", "huge", "if you could", "after that")
+            ):
                 return True
 
         if brief.response_goal == "replan_blocker":
@@ -916,7 +977,7 @@ class ConversationComposer:
                 return True
 
         if brief.response_goal == "timeline_summary":
-            if not any(marker in combined for marker in ("today", "tonight", "tomorrow", "week", "due")):
+            if not any(marker in combined for marker in ("today", "tonight", "tomorrow", "week", "due", "for the next hour")):
                 return True
             if combined.count(":") > 2:
                 return True

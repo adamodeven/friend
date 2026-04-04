@@ -58,12 +58,12 @@ class FakeAdapter:
         # Simulate second-attempt regeneration by returning a clean default when queue is exhausted.
         lowered_user = user.lower()
         if "reply goal: acknowledge_new_task" in lowered_user:
-            return "captured. next move: do a focused first pass right now and ping me when it's done."
+            return "locked in. captured it. if you touch it next, start with a focused first pass."
         if "reply goal: answer_question" in lowered_user:
             return "yep, these are live-generated responses right now."
         if "short checkin: yes" in lowered_user:
-            return "yo i'm here. what's the move right now?"
-        return "yeah, i'm live and tracking this. what's the move right now?"
+            return "yo i'm here."
+        return "yeah, i'm live and tracking this."
 
 
 def _brief(latest: str, recent_thread: list[str] | None = None, *, short_checkin: bool = False) -> ReplyBrief:
@@ -86,7 +86,7 @@ def _answer_brief(latest: str) -> ReplyBrief:
 
 
 def test_open_ended_message_uses_llm_path():
-    adapter = FakeAdapter(["yo what's up, i'm here. what's the move tonight?"], enabled=True)
+    adapter = FakeAdapter(["yo what's up, i'm here."], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_brief("what up tho"))
     assert adapter.text_calls >= 1
@@ -95,7 +95,7 @@ def test_open_ended_message_uses_llm_path():
 
 
 def test_lightweight_checkin_uses_lightweight_model_route():
-    adapter = FakeAdapter([], enabled=True, json_responses=[{"messages": ["yo i'm here. what's the move?"]}])
+    adapter = FakeAdapter([], enabled=True, json_responses=[{"messages": ["yo i'm here."]}])
     composer = ConversationComposer(adapter=adapter)
     composer._compose_model = "slow-model"  # type: ignore[attr-defined]
     composer._lightweight_compose_model = "fast-model"  # type: ignore[attr-defined]
@@ -128,16 +128,16 @@ def test_fallback_answer_question_handles_live_vs_canned_cleanly():
 def test_repetition_guard_triggers_regeneration():
     adapter = FakeAdapter(
         [
-            "got you. what's the move?",
+            "got you. i'm here.",
         ],
         enabled=True,
     )
     composer = ConversationComposer(adapter=adapter)
-    brief = _brief("hi", recent_thread=["assistant: got you. what's the move?"])
+    brief = _brief("hi", recent_thread=["assistant: got you. i'm here."])
     reply = composer.compose(brief)
     assert reply.used_fallback is False
     assert reply.regenerated_for_repetition is True
-    assert "got you. what's the move?" not in " ".join(reply.messages).lower()
+    assert "got you. i'm here." not in " ".join(reply.messages).lower()
 
 
 def test_composer_keeps_single_llm_attempt_path():
@@ -494,12 +494,12 @@ def test_short_checkin_repair_rejects_nonsequitur_context_bleed():
 
 
 def test_short_checkin_merges_tiny_lead_bubble():
-    adapter = FakeAdapter(["i'm back.\n\nyo i'm here. what's the move right now?"], enabled=True)
+    adapter = FakeAdapter(["i'm back.\n\nyo i'm here."], enabled=True)
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(_brief("hey", short_checkin=True))
     assert reply.used_fallback is False
     assert len(reply.messages) == 1
-    assert "what's the move right now?" in reply.messages[0].lower()
+    assert "yo i'm here." in reply.messages[0].lower()
 
 
 def test_composer_includes_style_guardrails_and_action_flags_in_payload():

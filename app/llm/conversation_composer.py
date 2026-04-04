@@ -203,14 +203,17 @@ class ConversationComposer:
         return (
             "You write outbound SMS replies for a personal execution manager. "
             "Sound like a real person texting: casual, modern, sharp, socially fluent, concise. "
+            "The vibe is closer to a plugged-in friend with good memory than a nagging task bot. "
             "Never robotic, corporate, therapist-y, or generic productivity-bot language. "
             "Most replies should be one short bubble. Use a second or third only when it clearly helps. "
+            "For casual, off-topic, or meta texts, answer socially first and do not force a task pivot. "
             "When the user is vague, overwhelmed, or slipping, narrow it to one concrete next move. "
             "Urgency should sound calm and real, never corny, fake inspirational, or hypey. "
             "If user asks what you do or whether replies are canned/live, answer directly in plain language first. "
             "If latest user message is a short greeting/check-in, keep it present-tense and lightweight. "
             "Do not drag in old thread drama unless the user asked about it in this message. "
             "For small-talk or quick checks, do not mirror the user's exact words back. "
+            "Do not keep asking the user to hand you another task unless the message clearly calls for it. "
             "Never start your first bubble with the same 4+ word sequence the user just sent. "
             "No em dashes, no markdown, no labels, no numbering. "
             "Answer what the user actually said, in context, and keep momentum. "
@@ -234,6 +237,7 @@ class ConversationComposer:
             "messages must contain 1 to 3 short text bubbles, each natural and human. "
             "No markdown, no numbering, no bullet points, no labels, no em dash. "
             "Default to one short bubble unless extra separation clearly improves clarity. "
+            "For casual, off-topic, or meta texts, answer socially first and do not force a task pivot. "
             "If the user is vague or overloaded, reduce cognitive load by choosing one next move. "
             "Urgency should feel clean and real, never corny or fake inspirational. "
             "Answer the latest user message directly and keep context continuity. "
@@ -326,6 +330,7 @@ class ConversationComposer:
             f"- max_chunk_length={brief.max_chunk_length}\n"
             "- answer the latest user message directly\n"
             "- keep it short by default\n"
+            "- for casual or off-topic texts, stay social first and do not force action\n"
             "- if you push for action, narrow to one next move\n"
             "- if you ask a follow-up, keep it brief and only ask one\n"
             "- if this is an answer_question goal, first bubble must be a direct answer statement\n"
@@ -385,27 +390,27 @@ class ConversationComposer:
             if brief.should_ask_question and brief.question_if_needed:
                 base = f"locked in. {first_fact} {brief.question_if_needed}"
             elif brief.suggested_next_step:
-                base = f"locked in. {first_fact} next move: {brief.suggested_next_step}"
+                base = f"locked in. {first_fact} if you touch it next, start with {brief.suggested_next_step}"
             else:
                 base = f"locked in. {first_fact}"
         elif brief.response_goal == "replan_blocker":
             if brief.question_if_needed:
-                base = f"got it, blocker noted. {brief.question_if_needed}"
+                base = f"got it, that shifts the plan. {brief.question_if_needed}"
             else:
-                base = "got it, blocker noted. what's the quickest next move to unblock it?"
+                base = "got it, that shifts the plan. what's the blocker i should account for first?"
         elif brief.response_goal == "confirm_update":
             fact = first_fact or "update applied."
             base = f"got it. {fact}"
         elif brief.should_ask_question and brief.question_if_needed:
             base = f"{opening} {brief.question_if_needed}"
         elif brief.suggested_next_step:
-            base = f"{opening} next move: {brief.suggested_next_step}"
+            base = f"{opening} if you want to keep it moving, start with {brief.suggested_next_step}"
         elif first_fact:
             base = f"{opening} {first_fact}"
         elif brief.is_short_checkin:
-            base = "yo i'm here. what's the move?"
+            base = "yo i'm here."
         else:
-            base = f"{opening} got the update. what's the next move?"
+            base = f"{opening} got the update."
         return self.chunker.chunk(
             base,
             max_chunk_length=brief.max_chunk_length,
@@ -666,6 +671,14 @@ class ConversationComposer:
         if not user_norm:
             return False
         user_words = user_norm.split()
+        short_checkin_reply_allowlist = {
+            "yo i m here",
+            "hey i m here",
+            "hi i m here",
+            "sup i m here",
+            "whatup i m here",
+            "whatsup i m here",
+        }
         for bubble in messages[:3]:
             bubble_norm = cls._normalize_text(bubble)
             if not bubble_norm:
@@ -685,7 +698,12 @@ class ConversationComposer:
             overlap_ratio = cls._lexical_overlap_ratio(bubble_norm, user_norm)
             if len(user_words) >= 6 and overlap_ratio >= 0.78:
                 return True
-            if len(user_words) <= 3 and user_norm in bubble_norm and len(bubble_norm.split()) <= 4:
+            if (
+                len(user_words) <= 3
+                and user_norm in bubble_norm
+                and len(bubble_norm.split()) <= 4
+                and bubble_norm not in short_checkin_reply_allowlist
+            ):
                 return True
         return False
 

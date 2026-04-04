@@ -319,3 +319,33 @@ def test_behavior_matrix_tmr_morning_query_uses_actual_timeline_window(db_sessio
 
     summary = TimelineService().build_tomorrow_morning_view(db_session, user.id, user.timezone).lower()
     assert "scout recruiter" not in summary
+
+
+def test_behavior_matrix_monday_morning_query_uses_window_label_not_full_question(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    tz = ZoneInfo(user.timezone)
+    now = datetime.now(tz=tz)
+    monday_morning = (now + timedelta(days=((0 - now.weekday()) % 7 or 7))).replace(hour=8, minute=0, second=0, microsecond=0)
+    create_task(
+        db_session,
+        user_id=user.id,
+        title="Email the scout recruiter",
+        priority=2,
+        start_after=monday_morning,
+        deadline_at=monday_morning.replace(hour=11),
+        deadline_source_phrase="monday morning",
+        metadata_json={"action_kind": "quick_message"},
+    )
+    db_session.commit()
+
+    outcome = StateEngine().apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(intent="timeline_query", confidence=0.9),
+        raw_text="what do i have on monday morning",
+    )
+
+    summary = outcome.key_facts_to_include[0].lower()
+    assert summary.startswith("monday morning")
+    assert not summary.startswith("what do i have on monday morning")

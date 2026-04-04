@@ -77,8 +77,11 @@ def humanize_window_phrase(phrase: str | None) -> str | None:
     lowered = re.sub(r"\s+", " ", phrase.lower()).strip()
     replacements = {
         "tomorrow morning": "tomorrow morning",
+        "tmr morning": "tomorrow morning",
         "tomorrow night": "tomorrow night",
+        "tmr night": "tomorrow night",
         "tonight": "tonight",
         "this weekend": "this weekend",
+        "weekend": "this weekend",
     }
     return replacements.get(lowered, lowered)

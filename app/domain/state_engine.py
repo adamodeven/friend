@@ -1492,7 +1492,25 @@ class StateEngine:
         if parsed.granularity == "day":
             start = start.replace(hour=6, minute=0, second=0, microsecond=0)
             end = end.replace(hour=23, minute=59, second=59, microsecond=0)
+        label = StateEngine._clean_timeline_window_label(raw_text, fallback=label)
         return label, start, end
+
+    @staticmethod
+    def _clean_timeline_window_label(raw_text: str, *, fallback: str) -> str:
+        lowered = raw_text.lower()
+        match = re.search(
+            r"\b(today|tonight|tomorrow(?: morning| night)?|tmr(?: morning| night)?|this weekend|weekend|"
+            r"monday(?: morning| night)?|tuesday(?: morning| night)?|wednesday(?: morning| night)?|"
+            r"thursday(?: morning| night)?|friday(?: morning| night)?|saturday(?: morning| night)?|"
+            r"sunday(?: morning| night)?)\b",
+            lowered,
+        )
+        if match:
+            phrase = humanize_window_phrase(match.group(1))
+            if phrase:
+                return phrase
+        phrase = humanize_window_phrase(fallback)
+        return phrase or fallback
 
     @staticmethod
     def _quick_task_subject(title: str) -> str:

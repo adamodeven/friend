@@ -346,7 +346,7 @@ def test_time_only_followup_updates_recent_relevant_task_instead_of_creating_new
     assert task.deadline_source_phrase == "monday morning"
     assert task.source_message_id == second_inbound.id
     assert outcome.response_goal == "confirm_update"
-    assert outcome.key_facts_to_include == ["okay bet, i moved it"]
+    assert outcome.key_facts_to_include == ["bet, switched it"]
 
 
 def test_day_only_followup_preserves_existing_part_of_day_window(db_session):
@@ -645,7 +645,7 @@ def test_complete_task_unblocks_successor_and_surfaces_next_action(db_session):
 
     refreshed_successor = db_session.execute(select(Task).where(Task.id == successor.id)).scalars().one()
     assert refreshed_successor.status == TaskStatus.active
-    assert any("that frees up Send recruiter email" == fact for fact in outcome.key_facts_to_include)
+    assert any("that opens up Send recruiter email" == fact for fact in outcome.key_facts_to_include)
     assert "send recruiter email" in (outcome.suggested_next_step or "").lower()
 
 
@@ -690,6 +690,41 @@ def test_multi_task_add_with_limited_timing_asks_one_prioritization_question(db_
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_ask_question is True
     assert outcome.question_if_needed == "which one gets annoying first if it slips?"
+
+
+def test_multi_task_add_with_clear_mixed_timing_sequences_without_kicking_back_priority(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    tz = ZoneInfo(user.timezone)
+    now = datetime.now(tz=tz)
+    tomorrow_night = (now + timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
+    tonight = now.replace(hour=21, minute=0, second=0, microsecond=0)
+    tomorrow_morning = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    monday_morning = (now + timedelta(days=((7 - now.weekday()) % 7 or 7))).replace(hour=9, minute=0, second=0, microsecond=0)
+
+    engine = StateEngine()
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="add_task",
+            confidence=0.94,
+            tasks=[
+                ExtractedTask(title="Finish the enclosure CAD", deadline_at=tomorrow_night, action_kind="project_chunk"),
+                ExtractedTask(title="Send the scout followup", deadline_at=monday_morning, start_after=monday_morning, action_kind="quick_message"),
+                ExtractedTask(title="Pay rent", deadline_at=tonight, action_kind="quick_admin"),
+                ExtractedTask(title="Text my roommate", deadline_at=tomorrow_morning, start_after=tomorrow_morning, action_kind="quick_message"),
+            ],
+        ),
+        raw_text="i need to finish the enclosure cad by tomorrow night and send the scout followup monday morning and pay rent tonight and text my roommate tomorrow morning",
+    )
+
+    assert outcome.response_goal == "acknowledge_new_task"
+    assert outcome.should_ask_question is False
+    assert any("if i were calling it, i'd start with finish the enclosure CAD".lower() in fact.lower() for fact in outcome.key_facts_to_include)
+    assert any("then just clear rent" in fact.lower() for fact in outcome.key_facts_to_include)
+    assert outcome.should_push_for_action is True
+    assert "enclosure cad" in (outcome.suggested_next_step or "").lower()
 
 
 def test_assignment_detail_followup_with_due_date_does_not_keep_asking_for_details(db_session):

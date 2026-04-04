@@ -563,7 +563,7 @@ def test_postprocess_softens_label_style_colons():
     lowered = " ".join(reply.messages).lower()
     assert "next up:" not in lowered
     assert "for tonight:" not in lowered
-    assert "and after that" in lowered or "for tonight," in lowered
+    assert "i'd start with" in lowered or "and after that" in lowered
 
 
 def test_postprocess_softens_tracker_phrases():
@@ -611,8 +611,8 @@ def test_postprocess_softens_reminder_and_reschedule_tracker_phrases():
     assert "bet, got it" not in lowered
     assert "won't let you forget" not in lowered
     assert "moved that to" not in lowered
-    assert "i'll remind you" in lowered
-    assert "okay bet, i moved it" in lowered
+    assert "i'll remind you" not in lowered
+    assert "bet, switched it" in lowered
 
 
 def test_postprocess_softens_next_up_without_colon_and_deleted_language():
@@ -709,30 +709,30 @@ def test_confirm_update_fallback_keeps_timing_shift_natural():
         ReplyBrief(
             response_goal="confirm_update",
             latest_user_message="actually monday morning",
-            key_facts_to_include=["okay bet, i moved it"],
+            key_facts_to_include=["bet, switched it"],
             generated_at=datetime.now(),
         )
     )
     lowered = " ".join(reply.messages).lower()
-    assert lowered == "okay bet, i moved it"
+    assert lowered == "bet, switched it"
 
 
 def test_confirm_update_shortcuts_past_llm_repeating_new_time():
     adapter = FakeAdapter(
-        ["okay bet, i moved it to monday morning"],
+        ["bet, switched it to monday morning"],
         enabled=True,
-        json_responses=[{"messages": ["okay bet, i moved it to monday morning"]}],
+        json_responses=[{"messages": ["bet, switched it to monday morning"]}],
     )
     composer = ConversationComposer(adapter=adapter)
     reply = composer.compose(
         ReplyBrief(
             response_goal="confirm_update",
             latest_user_message="actually monday morning",
-            key_facts_to_include=["okay bet, i moved it"],
+            key_facts_to_include=["bet, switched it"],
             generated_at=datetime.now(),
         )
     )
-    assert reply.messages == ["okay bet, i moved it"]
+    assert reply.messages == ["bet, switched it"]
 
 
 def test_postprocess_drops_redundant_ack_after_timing_shift():
@@ -742,10 +742,10 @@ def test_postprocess_drops_redundant_ack_after_timing_shift():
         generated_at=datetime.now(),
     )
     messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
-        ["okay bet, i moved it", "got it"],
+        ["bet, switched it", "got it"],
         brief,
     )
-    assert messages == ["okay bet, i moved it"]
+    assert messages == ["bet, switched it"]
 
 
 def test_progress_followup_question_stays_short_and_human():
@@ -825,6 +825,20 @@ def test_timeline_summary_humanizes_title_casing_inside_sentence():
     )
     messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
     assert messages.messages == ["monday morning it's just the scout recruiter email."]
+
+
+def test_timeline_summary_uses_more_human_plan_framing_for_tonight():
+    brief = ReplyBrief(
+        response_goal="timeline_summary",
+        latest_user_message="what should i do tonight",
+        key_facts_to_include=["tonight\n1. Finish the enclosure CAD - due sun 4/5\n2. Pay rent - due tonight"],
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
+    lowered = " ".join(messages.messages).lower()
+    assert "tonight i'd start with" in lowered
+    assert "finish the enclosure cad" in lowered
+    assert "pay rent" in lowered
 
 
 def test_timeline_summary_empty_window_reads_more_naturally():

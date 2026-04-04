@@ -197,7 +197,7 @@ def test_reschedule_confirmation_omits_unrelated_task_context(db_session):
         latest_user_message="actually monday morning",
         outcome=StateOutcome(
             response_goal="confirm_update",
-            key_facts_to_include=["okay bet, i moved it"],
+            key_facts_to_include=["bet, switched it"],
         ),
     )
 

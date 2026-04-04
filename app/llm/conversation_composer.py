@@ -477,9 +477,9 @@ class ConversationComposer:
             elif brief.should_ask_question and brief.question_if_needed:
                 base = f"{first_fact} {brief.question_if_needed}"
             elif brief.suggested_next_step:
-                base = f"bet, got it. {first_fact} if you touch it next, i'd start with {brief.suggested_next_step}"
+                base = f"{first_fact} if you touch it next, i'd start with {brief.suggested_next_step}"
             else:
-                base = f"bet, got it. {first_fact}"
+                base = first_fact
         elif brief.response_goal == "react_to_progress":
             fact = first_fact or "good looks, that clears it."
             if brief.should_ask_question and brief.question_if_needed:
@@ -496,6 +496,8 @@ class ConversationComposer:
         elif brief.response_goal == "confirm_update":
             fact = first_fact or "update applied."
             if self._looks_like_timing_shift_reply(brief, fact):
+                base = fact
+            elif fact.lower().startswith(("bet", "okay", "done", "got", "good looks", "we're good", "that clears")):
                 base = fact
             else:
                 base = f"bet. {fact}"
@@ -571,6 +573,13 @@ class ConversationComposer:
             return f"{heading}'s clear right now." if heading else ""
 
         if heading:
+            if heading in {"today", "tonight", "this week", "weekend"}:
+                if len(compact_items) == 1:
+                    return f"{heading} i'd start with {compact_items[0]}."
+                if len(compact_items) == 2:
+                    return f"{heading} i'd start with {compact_items[0]}, then {compact_items[1]}."
+                joined = ", ".join(compact_items[:-1]) + f", then {compact_items[-1]}"
+                return f"{heading} i'd start with {joined}."
             if len(compact_items) == 1:
                 return f"{heading} it's just {compact_items[0]}."
             if len(compact_items) == 2:
@@ -936,10 +945,14 @@ class ConversationComposer:
                 return [repaired] if repaired else []
         if brief.response_goal == "answer_question" and first.endswith("?") and len(messages) > 1:
             return messages[1:]
-        if brief.response_goal == "confirm_update" and cls._looks_like_timing_shift_reply(brief, first):
-            messages = [message for idx, message in enumerate(messages) if idx == 0 or not cls._is_redundant_ack_bubble(message)]
-            if messages:
-                return messages[:1] if cls._looks_like_timing_shift_reply(brief, messages[0]) else messages
+        if brief.response_goal == "confirm_update":
+            timing_shift_messages = [message for message in messages if cls._looks_like_timing_shift_reply(brief, message)]
+            if timing_shift_messages:
+                return timing_shift_messages[:1]
+            if cls._looks_like_timing_shift_reply(brief, first):
+                messages = [message for idx, message in enumerate(messages) if idx == 0 or not cls._is_redundant_ack_bubble(message)]
+                if messages:
+                    return messages[:1] if cls._looks_like_timing_shift_reply(brief, messages[0]) else messages
         return messages
 
     @classmethod
@@ -1020,16 +1033,22 @@ class ConversationComposer:
             (r"\bright now i'm tracking\b", "i'm holding"),
             (r"\bnext up is\b", "if you can, hit"),
             (r"\bnext up\b", "after that"),
+            (r"\bmain thing right now is\b", "if i were calling it, i'd start with"),
+            (r"\bmain thing tonight is\b", "if i were calling tonight, i'd start with"),
+            (r"\bthe first thing i'd clear is\b", "i'd just clear"),
+            (r"\bafter that, just clear\b", "then just clear"),
+            (r"\bafter that, just handle\b", "then just handle"),
+            (r"\bafter that, keep it moving on\b", "then i'd roll into"),
         )
         for pattern, replacement in replacements:
             softened = re.sub(pattern, replacement, softened, flags=re.IGNORECASE)
         softened = re.sub(r"\bbet,\s*got it[,.]?\s*", "bet ", softened, flags=re.IGNORECASE)
         softened = re.sub(r"\bi won't let you forget ([^.?!]+)", "okay bet, i'll remind you", softened, flags=re.IGNORECASE)
         softened = re.sub(r"\bi'll hit you ([^.?!]+)", "okay bet, i'll remind you", softened, flags=re.IGNORECASE)
-        softened = re.sub(r"\bmoved that to ([^.?!]+)", "okay bet, i moved it", softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\bmoved that to ([^.?!]+)", "bet, switched it", softened, flags=re.IGNORECASE)
         softened = re.sub(
             r"^\s*okay\s+(today|tomorrow|tmr|tonight|later|this weekend|next weekend|monday(?:\s+\w+)?|tuesday(?:\s+\w+)?|wednesday(?:\s+\w+)?|thursday(?:\s+\w+)?|friday(?:\s+\w+)?|saturday(?:\s+\w+)?|sunday(?:\s+\w+)?)\s*$",
-            "okay bet, i moved it",
+            "bet, switched it",
             softened,
             flags=re.IGNORECASE,
         )
@@ -1053,6 +1072,7 @@ class ConversationComposer:
                 "i got you",
                 "okay bet, i'll remind you",
                 "okay bet, i'll keep track of it",
+                "okay bet, i'll keep tabs on it",
             )
         )
 
@@ -1064,7 +1084,9 @@ class ConversationComposer:
         if not lowered_message.startswith(("actually ", "wait ", "nah ", "make that ", "change it to ")):
             return False
         lowered_fact = first_fact.lower()
-        return lowered_fact.startswith(("okay ", "tomorrow", "monday", "tonight", "this ", "next "))
+        return "switched it" in lowered_fact or lowered_fact.startswith(
+            ("okay ", "tomorrow", "monday", "tonight", "this ", "next ")
+        )
 
     @staticmethod
     def _is_redundant_ack_bubble(message: str) -> bool:

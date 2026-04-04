@@ -23,8 +23,10 @@ from app.db.repositories.task_repo import (
 )
 from app.domain.reminder_engine import ReminderEngine
 from app.domain.task_semantics import (
+    ACTION_KIND_PROJECT_CHUNK,
     ACTION_KIND_QUICK_ADMIN,
     ACTION_KIND_QUICK_MESSAGE,
+    ACTION_KIND_WORK_BLOCK,
     default_next_step,
     infer_action_kind,
     humanize_window_phrase,
@@ -103,7 +105,8 @@ class StateEngine:
                 task = bundle.root_tasks[0]
                 outcome.key_facts_to_include.append(self._new_task_fact(task, user.timezone))
             else:
-                outcome.key_facts_to_include.append("okay that's a real stack")
+                stack_facts = self._stack_sequence_facts(bundle.root_tasks, user.timezone)
+                outcome.key_facts_to_include.extend(stack_facts or ["okay that's a real stack"])
             if bundle.subtask_count:
                 outcome.key_facts_to_include.append(f"i broke one of those into {bundle.subtask_count} smaller step{'s' if bundle.subtask_count != 1 else ''}")
             if bundle.dependency_count:
@@ -147,10 +150,6 @@ class StateEngine:
                     outcome.key_facts_to_include.append(f"i'll circle back around {scheduled}")
 
             preferred_new_focus = self._preferred_focus_from_new_tasks(bundle.root_tasks, user.timezone)
-            if len(bundle.root_tasks) > 1 and preferred_new_focus:
-                focus_fact = self._crowded_load_focus_fact(preferred_new_focus)
-                if focus_fact:
-                    outcome.key_facts_to_include.append(focus_fact)
             if preferred_new_focus and self._should_push_new_task_focus(
                 preferred_new_focus,
                 task_count=len(bundle.root_tasks),
@@ -184,7 +183,7 @@ class StateEngine:
             ):
                 outcome.should_ask_question = True
                 outcome.question_if_needed = "want me to break that into 2 quick checkpoints?"
-            elif len(bundle.root_tasks) >= 3 and self._should_ask_load_prioritization_question(bundle.root_tasks):
+            elif len(bundle.root_tasks) >= 3 and self._should_ask_load_prioritization_question(bundle.root_tasks, user.timezone):
                 outcome.should_ask_question = True
                 outcome.question_if_needed = "which one gets annoying first if it slips?"
                 outcome.should_push_for_action = False
@@ -215,13 +214,12 @@ class StateEngine:
                 mark_task_complete(matched)
                 unlocked = self._refresh_successors(matched)
                 session.flush()
-                outcome.key_facts_to_include.append(f"{matched.title} is handled")
+                outcome.key_facts_to_include.append("bet, that clears it")
                 if unlocked:
-                    outcome.key_facts_to_include.append(f"that frees up {unlocked[0].title}")
+                    outcome.key_facts_to_include.append(f"that opens up {unlocked[0].title}")
                     outcome.mention_dependency = True
                 next_task = self.timeline.recommend_next_task(session, user.id, user.timezone)
                 if next_task:
-                    outcome.key_facts_to_include.append(f"after that, {next_task.title} is the one to hit")
                     outcome.suggested_next_step = self._next_step_for_task(next_task)
                     outcome.should_push_for_action = True
                     outcome.should_ask_question = False
@@ -1026,17 +1024,18 @@ class StateEngine:
             return True
         return False
 
-    @staticmethod
-    def _should_ask_load_prioritization_question(tasks: list[Task]) -> bool:
+    def _should_ask_load_prioritization_question(self, tasks: list[Task], timezone_name: str) -> bool:
         if len(tasks) < 3:
             return False
-        timed = sum(1 for task in tasks if task.deadline_at is not None or task.start_after is not None)
-        quick_actions = sum(
-            1
-            for task in tasks
-            if StateEngine._task_action_kind(task) in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}
-        )
-        return timed <= 1 or (len(tasks) >= 4 and timed <= 2) or (len(tasks) >= 4 and quick_actions >= 2)
+        ranked = self._rank_new_tasks(tasks, timezone_name)
+        meaningful = [item for item in ranked if self._task_action_kind(item[1]) not in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}]
+        if len(meaningful) <= 1:
+            return False
+        if len(ranked) < 2:
+            return False
+        top_score = ranked[0][0]
+        second_score = ranked[1][0]
+        return (top_score - second_score) < 45
 
     @staticmethod
     def _time_clarification_question(*, task_title: str, time_reference: str) -> str:
@@ -1231,13 +1230,13 @@ class StateEngine:
     def _reschedule_ack_text(time_phrase: str) -> str:
         phrase = humanize_window_phrase(time_phrase).strip().lower()
         if not phrase:
-            return "okay bet, i moved it"
+            return "bet, switched it"
         if phrase.startswith(("today", "tomorrow", "tmr", "tonight", "this ", "next ")):
-            return "okay bet, i moved it"
+            return "bet, switched it"
         weekday_prefixes = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
         if phrase.startswith(weekday_prefixes):
-            return "okay bet, i moved it"
-        return f"okay bet, i moved it to {phrase}"
+            return "bet, switched it"
+        return f"bet, switched it to {phrase}"
 
     @staticmethod
     def _merge_reschedule_time_reference(*, incoming_reference: str, task: Task) -> str:
@@ -1345,8 +1344,35 @@ class StateEngine:
         )
 
     def _preferred_focus_from_new_tasks(self, tasks: list[Task], timezone_name: str) -> Task | None:
-        if not tasks:
+        ranked = self._rank_new_tasks(tasks, timezone_name)
+        if not ranked:
             return None
+        now = datetime.now(tz=ZoneInfo(timezone_name))
+        focus = ranked[0][1]
+        focus_kind = self._task_action_kind(focus)
+        if focus_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+            for _, candidate in ranked[1:]:
+                candidate_kind = self._task_action_kind(candidate)
+                candidate_start_after = self._normalize_dt(candidate.start_after, timezone_name)
+                if candidate_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+                    continue
+                if candidate_start_after is not None and candidate_start_after > now:
+                    continue
+                if self._is_placeholder_assignment_title(candidate.title):
+                    continue
+                focus = candidate
+                focus_kind = candidate_kind
+                break
+        focus_start_after = self._normalize_dt(focus.start_after, timezone_name)
+        if focus_start_after is not None and focus_start_after > now and focus_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+            return None
+        if is_soft_later_phrase(focus.deadline_source_phrase):
+            return None
+        return focus
+
+    def _rank_new_tasks(self, tasks: list[Task], timezone_name: str) -> list[tuple[int, Task]]:
+        if not tasks:
+            return []
         now = datetime.now(tz=ZoneInfo(timezone_name))
         ranked: list[tuple[int, Task]] = []
         for task in tasks:
@@ -1370,6 +1396,16 @@ class StateEngine:
                 score -= 120
             if is_soft_later_phrase(task.deadline_source_phrase):
                 score -= 90
+            if self._is_placeholder_assignment_title(task.title):
+                score -= 140
+            if action_kind == ACTION_KIND_PROJECT_CHUNK:
+                score += 70
+            elif action_kind == ACTION_KIND_WORK_BLOCK:
+                score += 40
+            elif action_kind == ACTION_KIND_QUICK_ADMIN:
+                score -= 20
+            elif action_kind == ACTION_KIND_QUICK_MESSAGE:
+                score -= 40
             ranked.append((score, task))
 
         ranked.sort(
@@ -1379,14 +1415,7 @@ class StateEngine:
                 self._normalize_dt(item[1].created_at, timezone_name),
             )
         )
-        focus = ranked[0][1]
-        focus_kind = self._task_action_kind(focus)
-        focus_start_after = self._normalize_dt(focus.start_after, timezone_name)
-        if focus_start_after is not None and focus_start_after > now and focus_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
-            return None
-        if is_soft_later_phrase(focus.deadline_source_phrase):
-            return None
-        return focus
+        return ranked
 
     @staticmethod
     def _find_reusable_task(
@@ -1540,8 +1569,8 @@ class StateEngine:
         if action_kind == ACTION_KIND_QUICK_ADMIN and time_phrase:
             return self._quick_reminder_fact(time_phrase, is_admin=True)
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
-            return "okay bet, i got you"
-        return f"got {task.title}"
+            return "bet, i got you"
+        return "bet, locked it in"
 
     def _crowded_load_focus_fact(self, task: Task) -> str | None:
         action_kind = self._task_action_kind(task)
@@ -1552,13 +1581,75 @@ class StateEngine:
             return None
         return f"the main thing i'd keep in front is {lowered_title}"
 
+    def _stack_sequence_facts(self, tasks: list[Task], timezone_name: str) -> list[str]:
+        ranked = self._rank_new_tasks(tasks, timezone_name)
+        if not ranked:
+            return []
+        ordered = [task for _, task in ranked]
+        focus = self._preferred_focus_from_new_tasks(ordered, timezone_name) or ordered[0]
+        facts = ["okay that's a real stack"]
+        lead = self._stack_lead_fact(focus, timezone_name)
+        if lead:
+            facts.append(lead)
+        followup = next(
+            (
+                task
+                for task in ordered
+                if task.id != focus.id and self._should_mention_followup_task(task, timezone_name)
+            ),
+            None,
+        )
+        if followup is not None:
+            followup_fact = self._stack_followup_fact(followup, timezone_name)
+            if followup_fact:
+                facts.append(followup_fact)
+        return facts
+
+    def _stack_lead_fact(self, task: Task, timezone_name: str) -> str | None:
+        lowered_title = task.title[0].lower() + task.title[1:] if task.title else ""
+        if not lowered_title:
+            return None
+        action_kind = self._task_action_kind(task)
+        deadline_phrase = humanize_window_phrase(task.deadline_source_phrase)
+        if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+            return f"i'd just clear {self._quick_task_subject(task.title)} first"
+        if deadline_phrase in {"tonight", "today"}:
+            return f"if i were calling tonight, i'd start with {lowered_title}"
+        return f"if i were calling it, i'd start with {lowered_title}"
+
+    def _should_mention_followup_task(self, task: Task, timezone_name: str) -> bool:
+        action_kind = self._task_action_kind(task)
+        now = datetime.now(tz=ZoneInfo(timezone_name))
+        start_after = self._normalize_dt(task.start_after, timezone_name)
+        if start_after is not None and start_after > now:
+            return False
+        if self._is_placeholder_assignment_title(task.title):
+            return False
+        if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+            phrase = humanize_window_phrase(task.deadline_source_phrase)
+            return phrase in {"today", "tonight"} or (task.deadline_at is not None and self._normalize_dt(task.deadline_at, timezone_name) and self._normalize_dt(task.deadline_at, timezone_name) <= now.replace(hour=23, minute=59, second=59, microsecond=0))
+        return task.deadline_at is not None
+
+    def _stack_followup_fact(self, task: Task, timezone_name: str) -> str | None:
+        action_kind = self._task_action_kind(task)
+        if action_kind == ACTION_KIND_QUICK_ADMIN:
+            subject = self._quick_task_subject(task.title)
+            return f"then just clear {subject} so it stops hanging there"
+        if action_kind == ACTION_KIND_QUICK_MESSAGE:
+            subject = self._quick_task_subject(task.title)
+            return f"then just handle {subject}"
+        lowered_title = task.title[0].lower() + task.title[1:] if task.title else ""
+        if not lowered_title:
+            return None
+        return f"then i'd roll into {lowered_title}"
+
     @staticmethod
     def _quick_reminder_fact(time_phrase: str, *, is_admin: bool) -> str:
         phrase = humanize_window_phrase(time_phrase).strip().lower()
         if not phrase:
-            return "okay bet, i got you"
+            return "bet, i got you"
         if is_admin:
-            return "okay bet, i'll keep track of it"
+            return "okay bet, i'll keep tabs on it"
         return "okay bet, i'll remind you"
 
     @staticmethod

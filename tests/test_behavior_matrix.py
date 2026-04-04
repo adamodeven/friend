@@ -136,6 +136,49 @@ def test_state_matrix_asks_for_prioritization_when_load_is_wide_and_loose(db_ses
     assert outcome.question_if_needed == "which one gets annoying first if it slips?"
 
 
+def test_state_matrix_sequences_mixed_stack_when_one_task_is_clearly_the_real_work(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    now = datetime.now(tz=ZoneInfo(user.timezone))
+    tomorrow_morning = (now + timedelta(days=1)).replace(
+        hour=8,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    monday_morning = (now + timedelta(days=((7 - now.weekday()) % 7 or 7))).replace(
+        hour=9,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    tonight = now.replace(hour=21, minute=0, second=0, microsecond=0)
+    tomorrow_night = (now + timedelta(days=1)).replace(
+        hour=21,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    engine = StateEngine()
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="add_task",
+            confidence=0.94,
+            tasks=[
+                ExtractedTask(title="Finish enclosure CAD", deadline_at=tomorrow_night, action_kind="project_chunk"),
+                ExtractedTask(title="Send scout followup", deadline_at=monday_morning, start_after=monday_morning, action_kind="quick_message"),
+                ExtractedTask(title="Pay rent", deadline_at=tonight, action_kind="quick_admin"),
+                ExtractedTask(title="Text roommate back", deadline_at=tomorrow_morning, start_after=tomorrow_morning, action_kind="quick_message"),
+            ],
+        ),
+        raw_text="i need to finish the enclosure cad by tomorrow night and send the scout followup monday morning and pay rent tonight and text my roommate tomorrow morning",
+    )
+    assert outcome.should_ask_question is False
+    assert any("if i were calling it, i'd start with finish enclosure cad" in fact.lower() for fact in outcome.key_facts_to_include)
+
+
 def test_state_matrix_placeholder_assignment_without_details_prompts_for_followup(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None
@@ -293,7 +336,7 @@ def test_behavior_matrix_followup_reschedule_updates_same_reminder_task(db_sessi
     tasks = db_session.execute(select(Task).where(Task.user_id == user.id)).scalars().all()
     assert len(tasks) == 1
     assert tasks[0].deadline_source_phrase == "monday morning"
-    assert outcome.key_facts_to_include == ["okay bet, i moved it"]
+    assert outcome.key_facts_to_include == ["bet, switched it"]
 
 
 def test_behavior_matrix_day_only_reschedule_keeps_previous_morning_window(db_session):
@@ -345,7 +388,7 @@ def test_behavior_matrix_day_only_reschedule_keeps_previous_morning_window(db_se
     task = db_session.execute(select(Task).where(Task.user_id == user.id)).scalars().one()
     assert task.deadline_source_phrase == "monday morning"
     assert task.start_after is not None
-    assert outcome.key_facts_to_include == ["okay bet, i moved it"]
+    assert outcome.key_facts_to_include == ["bet, switched it"]
 
 
 def test_behavior_matrix_timing_followup_prefers_recent_reminder_over_other_active_tasks(db_session):

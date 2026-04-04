@@ -566,6 +566,21 @@ def test_postprocess_softens_label_style_colons():
     assert "and after that" in lowered or "for tonight," in lowered
 
 
+def test_postprocess_softens_tracker_phrases():
+    adapter = FakeAdapter([], enabled=True, json_responses=[{"messages": ["nice, that's off the board.", "that’s the main thing on deck."]}])
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="react_to_progress",
+            latest_user_message="finished it",
+            generated_at=datetime.now(),
+        )
+    )
+    lowered = " ".join(reply.messages).lower()
+    assert "off the board" not in lowered
+    assert "on deck" not in lowered
+
+
 def test_react_to_progress_fallback_hands_off_like_a_person():
     adapter = FakeAdapter([], enabled=False)
     composer = ConversationComposer(adapter=adapter)

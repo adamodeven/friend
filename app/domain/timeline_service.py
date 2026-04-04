@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Task, TaskDependency, TaskStatus
+from app.domain.task_semantics import ACTION_KIND_QUICK_ADMIN, ACTION_KIND_QUICK_MESSAGE, humanize_window_phrase, infer_action_kind
 
 
 @dataclass(slots=True)
@@ -152,6 +153,7 @@ class TimelineService:
             unlocks = [succ for succ in successors[task.id] if succ.status in {TaskStatus.active, TaskStatus.blocked}]
             start_after = self._ensure_tz(task.start_after, now.tzinfo) if task.start_after else None
             actionable = task.status == TaskStatus.active and not unresolved and (start_after is None or start_after <= now)
+            action_kind = self._task_action_kind(task)
 
             score = task.priority * 18
             due_at = self._ensure_tz(task.deadline_at, now.tzinfo) if task.deadline_at else None
@@ -159,7 +161,12 @@ class TimelineService:
             if start_after is not None and start_after > now:
                 wait_delta = start_after - now
                 score -= 220
-                if wait_delta <= timedelta(hours=12):
+                if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+                    score -= 150
+                pretty_window = humanize_window_phrase(task.deadline_source_phrase)
+                if pretty_window:
+                    due_label = f"for {pretty_window}"
+                elif wait_delta <= timedelta(hours=12):
                     due_label = f"for {start_after.astimezone(ZoneInfo(timezone)).strftime('%-I:%M%p').lower()}"
                 else:
                     due_label = f"for {start_after.astimezone(ZoneInfo(timezone)).strftime('%a %-m/%-d %-I:%M%p').lower()}"
@@ -227,6 +234,8 @@ class TimelineService:
                 score += min(task.slip_count, 3) * 8
             if start_after is not None and start_after > now and task.next_step:
                 score += 35
+                if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+                    score -= 55
 
             ranked.append(
                 RankedTask(
@@ -307,6 +316,15 @@ class TimelineService:
     @staticmethod
     def _default_move_text(task_title: str) -> str:
         return f"make a concrete dent in {task_title}"
+
+    @staticmethod
+    def _task_action_kind(task: Task) -> str:
+        return infer_action_kind(
+            task.title,
+            deadline_text=task.deadline_source_phrase,
+            start_after=task.start_after,
+            metadata=task.metadata_json or {},
+        )
 
     @staticmethod
     def _project_phrase(raw_text: str) -> str:

@@ -108,6 +108,39 @@ def test_recommend_next_task_waits_on_windowed_email_and_prefers_cad_tonight(db_
     assert "for" in morning_view
 
 
+def test_recommend_next_task_does_not_push_future_quick_message_over_real_work(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    tz = ZoneInfo(user.timezone)
+    now = datetime.now(tz=tz)
+    tomorrow_morning = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+
+    create_task(
+        db_session,
+        user_id=user.id,
+        title="Text roommate back",
+        priority=3,
+        start_after=tomorrow_morning,
+        deadline_source_phrase="tomorrow morning",
+        metadata_json={"action_kind": "quick_message"},
+    )
+    cad = create_task(
+        db_session,
+        user_id=user.id,
+        title="Finish enclosure CAD",
+        priority=4,
+        deadline_at=(now + timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0),
+        next_step="finish the first clean enclosure pass",
+        metadata_json={"action_kind": "project_chunk"},
+    )
+    db_session.commit()
+
+    service = TimelineService()
+    recommended = service.recommend_next_task(db_session, user.id, user.timezone)
+    assert recommended is not None
+    assert recommended.id == cad.id
+
+
 def test_week_view_orders_unlocking_work_ahead_of_lower_value_items(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None

@@ -5,6 +5,7 @@ from datetime import datetime
 
 from app.core.time_utils import interpret_time_reference, parse_human_time
 from app.core.config import get_settings
+from app.domain.task_semantics import ACTION_KIND_QUICK_ADMIN, ACTION_KIND_QUICK_MESSAGE, infer_action_kind
 from app.llm.client import OllamaAdapter
 from app.schemas.intent import ExtractedTask, ImageExtractionResult, IntentName, IntentResult, ParsedDeadline
 
@@ -52,12 +53,13 @@ class IntentExtractor:
                 "Return JSON keys: intent, confidence, needs_clarification, clarification_question, "
                 "time_reference, time_confidence, context_signal, blockers, summary, task, tasks. "
                 "Each task.title must be concise and should not include time phrases like tonight/tomorrow/by eod. "
+                "Each task should include action_kind when possible: quick_message, quick_admin, work_block, or project_chunk. "
                 "Only ask a clarification when timing ambiguity would materially change planning or reminders."
             ),
             user=(
                 f"timezone={timezone}\n"
                 f"message={text}\n"
-                "task objects should include: title, description, project, deadline_text, priority, confidence, next_step."
+                "task objects should include: title, description, project, deadline_text, priority, confidence, action_kind, next_step."
             ),
             options={
                 "temperature": 0.1,
@@ -454,10 +456,17 @@ class IntentExtractor:
             deadline_text=deadline_text,
             parsed_deadline=parsed_deadline,
         )
+        action_kind = self._infer_action_kind(
+            title=title,
+            segment=segment,
+            deadline_text=deadline_text,
+            start_after=start_after,
+        )
         next_step = self._windowed_action_prep_step(
             title=title,
             deadline_text=deadline_text,
             start_after=start_after,
+            action_kind=action_kind,
         )
 
         return ExtractedTask(
@@ -467,6 +476,7 @@ class IntentExtractor:
             soft_deadline_at=parsed_deadline.soft_deadline_at if parsed_deadline else None,
             start_after=start_after,
             confidence=task_confidence,
+            action_kind=action_kind,
             next_step=next_step,
             deadline=parsed_deadline,
         )
@@ -484,6 +494,14 @@ class IntentExtractor:
                 task.soft_deadline_at = task.deadline.soft_deadline_at
         elif task.deadline and not task.deadline.timezone:
             task.deadline.timezone = timezone
+        task.action_kind = task.action_kind or self._infer_action_kind(
+            title=task.title,
+            segment=task.description or task.title,
+            deadline_text=task.deadline_text,
+            start_after=task.start_after,
+        )
+        if task.start_after is not None and task.next_step and task.action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+            task.next_step = None
         return task
 
     def _sync_result_timing(self, *, result: IntentResult, timezone: str) -> None:
@@ -571,8 +589,11 @@ class IntentExtractor:
         title: str,
         deadline_text: str | None,
         start_after: datetime | None,
+        action_kind: str | None,
     ) -> str | None:
         if not deadline_text or start_after is None:
+            return None
+        if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
             return None
         lowered = title.lower()
         when = deadline_text.lower().strip()
@@ -594,6 +615,21 @@ class IntentExtractor:
         if lowered.startswith("upload "):
             return f"get the file ready so it's ready to upload {when}"
         return None
+
+    @staticmethod
+    def _infer_action_kind(
+        *,
+        title: str,
+        segment: str,
+        deadline_text: str | None,
+        start_after: datetime | None,
+    ) -> str:
+        return infer_action_kind(
+            title,
+            deadline_text=deadline_text,
+            start_after=start_after,
+            metadata=None,
+        )
 
     def _split_task_segments(self, text: str) -> list[str]:
         normalized = re.sub(r"\s+", " ", text.replace("\n", " ")).strip()

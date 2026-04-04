@@ -19,6 +19,7 @@ IntentName = Literal[
 
 DeadlineGranularity = Literal["exact", "hour", "part_of_day", "day", "weekend", "week", "month", "unknown"]
 DependencyRelation = Literal["blocked_by", "blocks", "subtask_of", "related_to"]
+ActionKind = Literal["quick_message", "quick_admin", "work_block", "project_chunk"]
 
 
 class ParsedDeadline(BaseModel):
@@ -49,6 +50,7 @@ class ExtractedTask(BaseModel):
     start_after: datetime | None = None
     priority: int = Field(default=2, ge=1, le=5)
     confidence: float = Field(default=0.6, ge=0, le=1)
+    action_kind: ActionKind | None = None
     next_step: str | None = None
     blockers: list[str] = Field(default_factory=list)
     dependencies: list[ExtractedDependency] = Field(default_factory=list)

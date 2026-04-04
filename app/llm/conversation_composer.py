@@ -756,6 +756,7 @@ class ConversationComposer:
         messages = [cls._strip_wrapping_quotes(cls._clean_candidate_text(m)) for m in messages]
         messages = [m.replace(";", ",") for m in messages]
         messages = [cls._soften_label_colons(m) for m in messages]
+        messages = [cls._soften_tracker_phrases(m) for m in messages]
         messages = cls._drop_scaffolding_preface(messages)
         messages = [m for m in messages if m and not cls._is_scaffolding_preface(m) and not cls._looks_hard_structured_leak(m)]
         if not messages:
@@ -817,6 +818,18 @@ class ConversationComposer:
             (r"\btomorrow morning plan:\s*", "tomorrow morning\n"),
             (r"\bthis week plan:\s*", "this week\n"),
             (r"\bweekend plan:\s*", "weekend\n"),
+        )
+        for pattern, replacement in replacements:
+            softened = re.sub(pattern, replacement, softened, flags=re.IGNORECASE)
+        return re.sub(r"\s{2,}", " ", softened).strip()
+
+    @staticmethod
+    def _soften_tracker_phrases(text: str) -> str:
+        softened = text
+        replacements = (
+            (r"\boff the board\b", "handled"),
+            (r"\bon the board\b", "in the mix"),
+            (r"\bon deck\b", "in the mix"),
         )
         for pattern, replacement in replacements:
             softened = re.sub(pattern, replacement, softened, flags=re.IGNORECASE)

@@ -259,6 +259,24 @@ def test_send_email_tomorrow_morning_becomes_windowed_action_not_immediate_deadl
     assert "ready to send tomorrow morning" in result.task.next_step.lower()
 
 
+def test_text_roommate_tomorrow_morning_is_quick_message_not_fake_project():
+    extractor = IntentExtractor()
+    result = extractor.extract("need to text my roommate tomorrow morning", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert result.task.action_kind == "quick_message"
+    assert result.task.start_after is not None
+    assert result.task.next_step is None
+
+
+def test_pay_rent_tonight_is_quick_admin_not_work_block():
+    extractor = IntentExtractor()
+    result = extractor.extract("need to pay rent tonight", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert result.task.action_kind == "quick_admin"
+
+
 def test_mixed_assignment_and_context_creates_placeholder_task_and_context_signal():
     extractor = IntentExtractor()
     result = extractor.extract("prof just dropped another assignment and i'm in class rn", "America/New_York")

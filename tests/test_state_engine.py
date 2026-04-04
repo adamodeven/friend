@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -177,6 +177,38 @@ def test_single_add_task_does_not_force_checkpoint_question(db_session):
     assert outcome.should_ask_question is False
     assert outcome.question_if_needed is None
     assert "final proofread" in (outcome.suggested_next_step or "").lower()
+
+
+def test_quick_message_windowed_task_does_not_push_fake_prep_step(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+    tomorrow_morning = (datetime.now(tz=ZoneInfo(user.timezone)) + timedelta(days=1)).replace(
+        hour=8,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    intent = IntentResult(
+        intent="add_task",
+        confidence=0.9,
+        task=ExtractedTask(
+            title="Text roommate back",
+            deadline_text="tomorrow morning",
+            start_after=tomorrow_morning,
+            action_kind="quick_message",
+            next_step=None,
+        ),
+    )
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="need to text my roommate tomorrow morning",
+    )
+    assert outcome.response_goal == "acknowledge_new_task"
+    assert outcome.should_push_for_action is False
+    assert outcome.suggested_next_step is None
 
 
 def test_default_next_step_does_not_repeat_submit_for_submit_titles():

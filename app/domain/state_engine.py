@@ -21,6 +21,13 @@ from app.db.repositories.task_repo import (
     set_task_blocked,
 )
 from app.domain.reminder_engine import ReminderEngine
+from app.domain.task_semantics import (
+    ACTION_KIND_QUICK_ADMIN,
+    ACTION_KIND_QUICK_MESSAGE,
+    default_next_step,
+    infer_action_kind,
+    is_soft_later_phrase,
+)
 from app.domain.timeline_service import TimelineService
 from app.schemas.intent import ExtractedDependency, ExtractedTask, IntentResult
 from app.schemas.reply import ReplyTaskContext, StateOutcome
@@ -83,7 +90,7 @@ class StateEngine:
             outcome.mention_dependency = bundle.dependency_count > 0 or bundle.subtask_count > 0
             outcome.is_multi_task_turn = len(bundle.root_tasks) > 1
             outcome.task_contexts = [self._task_context(task) for task in bundle.root_tasks[:6]]
-            outcome.should_push_for_action = True
+            outcome.should_push_for_action = False
             outcome.operational_reason = (
                 f"intent=add_task tasks={len(bundle.root_tasks)} deps={bundle.dependency_count} subtasks={bundle.subtask_count}"
             )
@@ -135,9 +142,10 @@ class StateEngine:
                     scheduled = pending.scheduled_for.astimezone(ZoneInfo(user.timezone)).strftime("%-I:%M%p").lower()
                     outcome.key_facts_to_include.append(f"i'll circle back around {scheduled}")
 
-            recommended = self.timeline.recommend_next_task(session, user.id, user.timezone)
-            if recommended:
-                outcome.suggested_next_step = self._next_step_for_task(recommended)
+            preferred_new_focus = self._preferred_focus_from_new_tasks(bundle.root_tasks, user.timezone)
+            if preferred_new_focus:
+                outcome.suggested_next_step = self._next_step_for_task(preferred_new_focus)
+                outcome.should_push_for_action = True
 
             if intent.context_signal:
                 block = self._record_context_block(session, user=user, raw_text=intent.context_signal, confidence=intent.confidence)
@@ -166,6 +174,8 @@ class StateEngine:
             elif len(bundle.root_tasks) >= 3 and self._should_ask_load_prioritization_question(bundle.root_tasks):
                 outcome.should_ask_question = True
                 outcome.question_if_needed = "which one of those blows up the hardest if it slips?"
+                outcome.should_push_for_action = False
+                outcome.suggested_next_step = None
             else:
                 outcome.should_ask_question = False
                 outcome.question_if_needed = None
@@ -491,7 +501,12 @@ class StateEngine:
         deadline_is_ambiguous = extracted.deadline.is_ambiguous if extracted.deadline else False
         deadline_granularity = extracted.deadline.granularity if extracted.deadline else "unknown"
         deadline_timezone = extracted.deadline.timezone if extracted.deadline else user.timezone
-        next_step = extracted.next_step or self._default_next_step(extracted.title)
+        action_kind = extracted.action_kind or infer_action_kind(
+            extracted.title,
+            deadline_text=deadline_source,
+            start_after=extracted.start_after,
+        )
+        next_step = extracted.next_step or self._default_next_step(extracted.title, action_kind=action_kind)
 
         task = create_task(
             session,
@@ -516,6 +531,7 @@ class StateEngine:
                 "extracted_blockers": extracted.blockers,
                 "declared_dependency_titles": [dependency.title for dependency in extracted.dependencies],
                 "timing_kind": "windowed_action" if extracted.start_after else "deadline",
+                "action_kind": action_kind,
             },
         )
         task.user = user
@@ -631,9 +647,16 @@ class StateEngine:
             user_id=user.id,
             title=normalized_title,
             priority=max(3, task.priority),
-            next_step=self._default_next_step(normalized_title),
+            next_step=self._default_next_step(
+                normalized_title,
+                action_kind=infer_action_kind(normalized_title),
+            ),
             extraction_confidence=dependency.confidence,
-            metadata_json={"created_from_dependency": dependency.title, "notes": dependency.notes},
+            metadata_json={
+                "created_from_dependency": dependency.title,
+                "notes": dependency.notes,
+                "action_kind": infer_action_kind(normalized_title),
+            },
         )
         related.user = user
         title_index[self._normalize_title(related.title)] = related
@@ -722,9 +745,12 @@ class StateEngine:
             user_id=user.id,
             title=normalized_title,
             priority=3,
-            next_step=self._default_next_step(normalized_title),
+            next_step=self._default_next_step(
+                normalized_title,
+                action_kind=infer_action_kind(normalized_title),
+            ),
             extraction_confidence=0.72,
-            metadata_json={"created_from_blocker": blocker_text},
+            metadata_json={"created_from_blocker": blocker_text, "action_kind": infer_action_kind(normalized_title)},
         )
         prerequisite.user = user
         title_index[self._normalize_title(prerequisite.title)] = prerequisite
@@ -878,26 +904,8 @@ class StateEngine:
         return "busy"
 
     @staticmethod
-    def _default_next_step(task_title: str) -> str:
-        title = task_title.strip()
-        lowered = title.lower()
-        if lowered.startswith("submit "):
-            return f"do a final proofread, then {title[0].lower() + title[1:]}"
-        if "submit" in lowered:
-            return f"do a final proofread, then submit {title}"
-        if lowered.startswith("send "):
-            return title
-        if "send" in lowered or "email" in lowered or "text" in lowered:
-            return f"send {title}"
-        if lowered.startswith("finish "):
-            return title
-        if "finish" in lowered:
-            return f"finish the first complete pass on {title}"
-        if lowered.startswith("fix "):
-            return title
-        if lowered.startswith("review "):
-            return title
-        return f"start a 20-min first pass on {title}"
+    def _default_next_step(task_title: str, *, action_kind: str | None = None) -> str:
+        return default_next_step(task_title, action_kind=action_kind)
 
     @staticmethod
     def _should_offer_checkpoints(*, task_title: str, raw_text: str, suggested_next_step: str | None) -> bool:
@@ -1048,14 +1056,73 @@ class StateEngine:
         unresolved = [link.predecessor_task for link in task.successor_links if link.predecessor_task.status != TaskStatus.completed]
         if unresolved:
             prerequisite = unresolved[0]
-            return prerequisite.next_step or self._default_next_step(prerequisite.title)
+            return prerequisite.next_step or self._default_next_step(
+                prerequisite.title,
+                action_kind=self._task_action_kind(prerequisite),
+            )
         if task.next_step:
             return task.next_step
         active_subtasks = [subtask for subtask in task.subtasks if subtask.status in {TaskStatus.active, TaskStatus.blocked}]
         if active_subtasks:
             subtask = active_subtasks[0]
-            return subtask.next_step or self._default_next_step(subtask.title)
-        return self._default_next_step(task.title)
+            return subtask.next_step or self._default_next_step(
+                subtask.title,
+                action_kind=self._task_action_kind(subtask),
+            )
+        return self._default_next_step(task.title, action_kind=self._task_action_kind(task))
+
+    @staticmethod
+    def _task_action_kind(task: Task) -> str:
+        return infer_action_kind(
+            task.title,
+            deadline_text=task.deadline_source_phrase,
+            start_after=task.start_after,
+            metadata=task.metadata_json or {},
+        )
+
+    def _preferred_focus_from_new_tasks(self, tasks: list[Task], timezone_name: str) -> Task | None:
+        if not tasks:
+            return None
+        now = datetime.now(tz=ZoneInfo(timezone_name))
+        ranked: list[tuple[int, Task]] = []
+        for task in tasks:
+            action_kind = self._task_action_kind(task)
+            start_after = self._normalize_dt(task.start_after, timezone_name)
+            deadline_at = self._normalize_dt(task.deadline_at, timezone_name)
+            score = task.priority * 18
+            if deadline_at is not None:
+                delta = deadline_at - now
+                if delta <= timedelta(hours=8):
+                    score += 140
+                elif delta <= timedelta(days=1):
+                    score += 90
+                else:
+                    score += 35
+            if start_after is not None and start_after > now:
+                score -= 170
+                if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+                    score -= 120
+            if task.status == TaskStatus.blocked:
+                score -= 120
+            if is_soft_later_phrase(task.deadline_source_phrase):
+                score -= 90
+            ranked.append((score, task))
+
+        ranked.sort(
+            key=lambda item: (
+                -item[0],
+                self._normalize_dt(item[1].deadline_at, timezone_name) or datetime.max.replace(tzinfo=ZoneInfo(timezone_name)),
+                self._normalize_dt(item[1].created_at, timezone_name),
+            )
+        )
+        focus = ranked[0][1]
+        focus_kind = self._task_action_kind(focus)
+        focus_start_after = self._normalize_dt(focus.start_after, timezone_name)
+        if focus_start_after is not None and focus_start_after > now and focus_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+            return None
+        if is_soft_later_phrase(focus.deadline_source_phrase):
+            return None
+        return focus
 
     @staticmethod
     def _record_context_block(session: Session, *, user, raw_text: str, confidence: float) -> ScheduleBlock:

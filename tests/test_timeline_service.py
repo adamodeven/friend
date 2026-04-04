@@ -74,6 +74,40 @@ def test_tomorrow_morning_view_lists_due_items_in_window(db_session):
     assert "submit scout app" in lowered
 
 
+def test_recommend_next_task_waits_on_windowed_email_and_prefers_cad_tonight(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    tz = ZoneInfo(user.timezone)
+    now = datetime.now(tz=tz)
+    tomorrow_morning = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+    email = create_task(
+        db_session,
+        user_id=user.id,
+        title="Send that email",
+        priority=5,
+        deadline_at=(now + timedelta(days=1)).replace(hour=11, minute=0, second=0, microsecond=0),
+        start_after=tomorrow_morning,
+        next_step="draft the email tonight so it's ready to send tomorrow morning",
+    )
+    cad = create_task(
+        db_session,
+        user_id=user.id,
+        title="Finish the CAD for the enclosure",
+        priority=4,
+        deadline_at=(now + timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0),
+    )
+    db_session.commit()
+
+    service = TimelineService()
+    recommended = service.recommend_next_task(db_session, user.id, user.timezone)
+    assert recommended is not None
+    assert recommended.id == cad.id
+
+    morning_view = service.build_tomorrow_morning_view(db_session, user.id, user.timezone).lower()
+    assert "send that email" in morning_view
+    assert "for" in morning_view
+
+
 def test_week_view_orders_unlocking_work_ahead_of_lower_value_items(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None

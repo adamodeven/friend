@@ -90,18 +90,16 @@ class StateEngine:
 
             if len(bundle.root_tasks) == 1:
                 task = bundle.root_tasks[0]
-                outcome.key_facts_to_include.append(f"task captured: {task.title}")
+                outcome.key_facts_to_include.append(f"got {task.title} on the board")
             else:
-                outcome.key_facts_to_include.append(f"captured {len(bundle.root_tasks)} tasks from this message")
-                outcome.key_facts_to_include.append(
-                    "queued: " + ", ".join(task.title for task in bundle.root_tasks[:3])
-                )
+                outcome.key_facts_to_include.append(f"got {len(bundle.root_tasks)} things from that text")
+                outcome.key_facts_to_include.append("on deck: " + ", ".join(task.title for task in bundle.root_tasks[:3]))
             if bundle.subtask_count:
-                outcome.key_facts_to_include.append(f"split out {bundle.subtask_count} subtasks")
+                outcome.key_facts_to_include.append(f"split out {bundle.subtask_count} smaller steps")
             if bundle.dependency_count:
-                outcome.key_facts_to_include.append(f"linked {bundle.dependency_count} prerequisite edges")
+                outcome.key_facts_to_include.append(f"linked {bundle.dependency_count} dependency threads")
             if bundle.created_prerequisites:
-                outcome.key_facts_to_include.append(f"added prerequisite: {bundle.created_prerequisites[0].title}")
+                outcome.key_facts_to_include.append(f"real blocker looks like {bundle.created_prerequisites[0].title}")
             if bundle.deadline_tasks:
                 earliest = min(
                     bundle.deadline_tasks,
@@ -109,7 +107,7 @@ class StateEngine:
                 )
                 due_text = self._format_due(earliest.deadline_at, user.timezone)
                 if due_text:
-                    outcome.key_facts_to_include.append(f"earliest due {due_text}")
+                    outcome.key_facts_to_include.append(f"closest deadline is {due_text}")
                 outcome.mention_deadline = True
                 if earliest.deadline_at is not None:
                     outcome.urgency_level = self._urgency_from_deadline(earliest.deadline_at, user.timezone)
@@ -118,11 +116,17 @@ class StateEngine:
                 pending = self._next_pending_reminder_for_task(session, task.id)
                 if pending:
                     scheduled = pending.scheduled_for.astimezone(ZoneInfo(user.timezone)).strftime("%-I:%M%p").lower()
-                    outcome.key_facts_to_include.append(f"check-in scheduled around {scheduled}")
+                    outcome.key_facts_to_include.append(f"i'll circle back around {scheduled}")
 
             recommended = self.timeline.recommend_next_task(session, user.id, user.timezone)
             if recommended:
                 outcome.suggested_next_step = self._next_step_for_task(recommended)
+
+            if intent.context_signal:
+                block = self._record_context_block(session, user=user, raw_text=intent.context_signal, confidence=intent.confidence)
+                outcome.key_facts_to_include.append(f"you're busy with {block.block_type.replace('_', ' ')} till {block.ends_at.astimezone(ZoneInfo(user.timezone)).strftime('%-I:%M%p').lower()}")
+                outcome.should_push_for_action = False
+            needs_post_context_followup = intent.context_signal and self._looks_like_placeholder_assignment(bundle.root_tasks)
 
             if bundle.ambiguous_deadline_task and bundle.ambiguous_time_reference:
                 outcome.should_ask_question = True
@@ -143,6 +147,10 @@ class StateEngine:
             else:
                 outcome.should_ask_question = False
                 outcome.question_if_needed = None
+
+            if needs_post_context_followup and not outcome.should_ask_question:
+                outcome.should_ask_question = True
+                outcome.question_if_needed = "when you're out, send me the assignment details and i'll slot it cleanly"
 
         elif intent.intent == "complete_task":
             matched = self._match_task_from_text(session, user.id, raw_text)
@@ -190,21 +198,12 @@ class StateEngine:
             outcome.should_push_for_action = True
 
         elif intent.intent == "context_signal":
-            starts, ends = time_window_for_context(intent.context_signal or raw_text, user.timezone)
-            block = ScheduleBlock(
-                user_id=user.id,
-                block_type=self._normalize_context_type(intent.context_signal or raw_text),
-                starts_at=starts,
-                ends_at=ends,
-                confidence=intent.confidence,
-                notes=raw_text,
-            )
-            session.add(block)
+            block = self._record_context_block(session, user=user, raw_text=intent.context_signal or raw_text, confidence=intent.confidence)
             outcome.response_goal = "acknowledge_context"
             outcome.emotional_tone = "calm"
-            outcome.key_facts_to_include.append(f"availability updated: {block.block_type}")
+            outcome.key_facts_to_include.append(f"got it, you're tied up with {block.block_type.replace('_', ' ')}")
             outcome.key_facts_to_include.append(
-                f"pause active until {ends.astimezone(ZoneInfo(user.timezone)).strftime('%-I:%M%p').lower()}"
+                f"i'll back off till {block.ends_at.astimezone(ZoneInfo(user.timezone)).strftime('%-I:%M%p').lower()}"
             )
             outcome.avoid_topics.append("hard-pressure push while unavailable")
 
@@ -245,7 +244,7 @@ class StateEngine:
                 archived_count = self._clear_active_tasks(session, user.id)
                 outcome.response_goal = "confirm_update"
                 outcome.emotional_tone = "direct"
-                outcome.key_facts_to_include.append(f"cleared active task list ({archived_count} archived)")
+                outcome.key_facts_to_include.append(f"cleared the board ({archived_count} archived)")
                 outcome.should_push_for_action = archived_count == 0
                 if archived_count == 0:
                     outcome.suggested_next_step = "drop the next task you want tracked"
@@ -259,9 +258,9 @@ class StateEngine:
                     if action == "archive":
                         archived_count = self._archive_task_and_skip_pending_reminders(session, matched)
                         session.flush()
-                        outcome.key_facts_to_include.append(f"archived task: {matched.title}")
+                        outcome.key_facts_to_include.append(f"took {matched.title} off the board")
                         if archived_count > 1:
-                            outcome.key_facts_to_include.append(f"also archived {archived_count - 1} linked subtasks")
+                            outcome.key_facts_to_include.append(f"that also cleared {archived_count - 1} linked subtasks")
                         applied_change = True
                     if intent.time_reference:
                         parsed, conf = parse_human_time(intent.time_reference, timezone=user.timezone)
@@ -477,6 +476,7 @@ class StateEngine:
             next_step=next_step,
             deadline_at=deadline_at,
             soft_deadline_at=soft_deadline_at,
+            start_after=extracted.start_after,
             deadline_source_phrase=deadline_source,
             deadline_confidence=deadline_confidence,
             deadline_is_ambiguous=deadline_is_ambiguous,
@@ -488,6 +488,7 @@ class StateEngine:
                 "source_text": raw_text,
                 "extracted_blockers": extracted.blockers,
                 "declared_dependency_titles": [dependency.title for dependency in extracted.dependencies],
+                "timing_kind": "windowed_action" if extracted.start_after else "deadline",
             },
         )
         task.user = user
@@ -1011,6 +1012,27 @@ class StateEngine:
             subtask = active_subtasks[0]
             return subtask.next_step or self._default_next_step(subtask.title)
         return self._default_next_step(task.title)
+
+    @staticmethod
+    def _record_context_block(session: Session, *, user, raw_text: str, confidence: float) -> ScheduleBlock:
+        starts, ends = time_window_for_context(raw_text, user.timezone)
+        block = ScheduleBlock(
+            user_id=user.id,
+            block_type=StateEngine._normalize_context_type(raw_text),
+            starts_at=starts,
+            ends_at=ends,
+            confidence=confidence,
+            notes=raw_text,
+        )
+        session.add(block)
+        return block
+
+    @staticmethod
+    def _looks_like_placeholder_assignment(tasks: list[Task]) -> bool:
+        if len(tasks) != 1:
+            return False
+        lowered = tasks[0].title.lower()
+        return "new assignment" in lowered or "assignment from professor" in lowered
 
     @staticmethod
     def _task_context(task: Task) -> ReplyTaskContext:

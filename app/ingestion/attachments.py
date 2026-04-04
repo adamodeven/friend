@@ -183,6 +183,18 @@ class AttachmentIngestionService:
     def _task_title_from_analysis(analysis: dict) -> str | None:
         raw_title = (analysis.get("title") or "").strip()
         if raw_title:
+            lowered = raw_title.lower()
+            if any(
+                marker in lowered
+                for marker in (
+                    "no clear assignment",
+                    "no clear title",
+                    "logging task",
+                    "text conversation",
+                    "text convo",
+                )
+            ):
+                return None
             return raw_title
         deliverables = [item.strip() for item in analysis.get("deliverables") or [] if str(item).strip()]
         if len(deliverables) == 1:
@@ -200,7 +212,7 @@ class AttachmentIngestionService:
             lines.append(f"due text: {due_text}")
         deliverables = [item.strip() for item in analysis.get("deliverables") or [] if str(item).strip()]
         if deliverables:
-            lines.append("deliverables: " + "; ".join(deliverables[:4]))
+            lines.append("deliverables: " + ", ".join(deliverables[:4]))
         raw_text = (analysis.get("raw_text") or "").strip()
         if raw_text:
             lines.append(f"ocr: {raw_text[:220]}")

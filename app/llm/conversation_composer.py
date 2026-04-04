@@ -204,18 +204,21 @@ class ConversationComposer:
             "You write outbound SMS replies for a personal execution manager. "
             "Sound like a real person texting: casual, modern, sharp, socially fluent, concise. "
             "The vibe is closer to a plugged-in friend with good memory than a nagging task bot. "
+            "The actual content has to sound human too, not like task-tracker copy wearing slang. "
             "Never robotic, corporate, therapist-y, or generic productivity-bot language. "
             "Most replies should be one short bubble. Use a second or third only when it clearly helps. "
             "For casual, off-topic, or meta texts, answer socially first and do not force a task pivot. "
             "When the user is vague, overwhelmed, or slipping, narrow it to one concrete next move. "
             "Urgency should sound calm and real, never corny, fake inspirational, or hypey. "
+            "Avoid stiff database-y verbs like archived, captured, or logged unless the user used that language first. "
+            "Prefer natural phrasing like bet, got it, took that off the board, good looks, or we're good there when it fits. "
             "If user asks what you do or whether replies are canned/live, answer directly in plain language first. "
             "If latest user message is a short greeting/check-in, keep it present-tense and lightweight. "
             "Do not drag in old thread drama unless the user asked about it in this message. "
             "For small-talk or quick checks, do not mirror the user's exact words back. "
             "Do not keep asking the user to hand you another task unless the message clearly calls for it. "
             "Never start your first bubble with the same 4+ word sequence the user just sent. "
-            "No em dashes, no markdown, no labels, no numbering. "
+            "No em dashes, no semicolons, no markdown, no labels, no numbering. "
             "Answer what the user actually said, in context, and keep momentum. "
             "Use 1-3 message bubbles max, each short. "
             "Output plain text only. If multiple bubbles, separate them with one blank line. "
@@ -235,11 +238,12 @@ class ConversationComposer:
             "You write outbound SMS replies for a personal execution manager. "
             "Output valid JSON only with this exact schema: {\"messages\": [\"bubble 1\", \"bubble 2\"]}. "
             "messages must contain 1 to 3 short text bubbles, each natural and human. "
-            "No markdown, no numbering, no bullet points, no labels, no em dash. "
+            "No markdown, no numbering, no bullet points, no labels, no em dash, no semicolons. "
             "Default to one short bubble unless extra separation clearly improves clarity. "
             "For casual, off-topic, or meta texts, answer socially first and do not force a task pivot. "
             "If the user is vague or overloaded, reduce cognitive load by choosing one next move. "
             "Urgency should feel clean and real, never corny or fake inspirational. "
+            "Do not sound like a database or task tracker. "
             "Answer the latest user message directly and keep context continuity. "
             "If asked whether responses are live/canned, answer that directly in the first bubble. "
             f"{strict_rules}"
@@ -335,6 +339,7 @@ class ConversationComposer:
             "- if you ask a follow-up, keep it brief and only ask one\n"
             "- if this is an answer_question goal, first bubble must be a direct answer statement\n"
             "- keep it human and text-like\n"
+            "- no semicolons in the user-facing reply\n"
             "- never expose internal system labels\n"
         )
         return payload
@@ -388,11 +393,11 @@ class ConversationComposer:
         elif brief.response_goal == "acknowledge_new_task":
             first_fact = first_fact or "task captured."
             if brief.should_ask_question and brief.question_if_needed:
-                base = f"locked in. {first_fact} {brief.question_if_needed}"
+                base = f"bet, got it. {first_fact} {brief.question_if_needed}"
             elif brief.suggested_next_step:
-                base = f"locked in. {first_fact} if you touch it next, start with {brief.suggested_next_step}"
+                base = f"bet, got it. {first_fact} if you touch it next, start with {brief.suggested_next_step}"
             else:
-                base = f"locked in. {first_fact}"
+                base = f"bet, got it. {first_fact}"
         elif brief.response_goal == "replan_blocker":
             if brief.question_if_needed:
                 base = f"got it, that shifts the plan. {brief.question_if_needed}"
@@ -400,7 +405,7 @@ class ConversationComposer:
                 base = "got it, that shifts the plan. what's the blocker i should account for first?"
         elif brief.response_goal == "confirm_update":
             fact = first_fact or "update applied."
-            base = f"got it. {fact}"
+            base = f"bet. {fact}"
         elif brief.should_ask_question and brief.question_if_needed:
             base = f"{opening} {brief.question_if_needed}"
         elif brief.suggested_next_step:
@@ -448,7 +453,7 @@ class ConversationComposer:
         if not items:
             return (heading + " is clear right now.") if heading else cleaned
 
-        compact_items = "; ".join(items[:3]).strip()
+        compact_items = ", ".join(items[:3]).strip()
         if heading:
             return f"{heading}: {compact_items}"
         return compact_items
@@ -464,6 +469,7 @@ class ConversationComposer:
         if any(token in lowered for token in cls._quality_banned_openers()):
             return ""
         candidate = re.sub(r"\s*:\s*;\s*", ": ", candidate)
+        candidate = candidate.replace(";", ",")
         candidate = re.sub(r"[ \t]{2,}", " ", candidate)
         candidate = re.sub(r"\n{3,}", "\n\n", candidate).strip()
         return candidate
@@ -737,6 +743,7 @@ class ConversationComposer:
         if not messages:
             return messages
         messages = [cls._strip_wrapping_quotes(cls._clean_candidate_text(m)) for m in messages]
+        messages = [m.replace(";", ",") for m in messages]
         messages = cls._drop_scaffolding_preface(messages)
         messages = [m for m in messages if m and not cls._is_scaffolding_preface(m) and not cls._looks_hard_structured_leak(m)]
         if not messages:
@@ -883,7 +890,7 @@ class ConversationComposer:
             return True
 
         if brief.response_goal == "acknowledge_new_task":
-            if not any(marker in combined for marker in ("got it", "locked in", "captured", "added", "noted", "next move")):
+            if not any(marker in combined for marker in ("got it", "bet", "locked in", "captured", "added", "noted", "on the board", "on deck", "start with")):
                 return True
             if "what's on your mind?" in combined:
                 return True
@@ -893,19 +900,19 @@ class ConversationComposer:
                 return True
             if re.search(r"\bsubmit\s+i\s+submit\b", combined):
                 return True
-            if brief.should_push_for_action and brief.suggested_next_step and "next move" not in combined:
+            if brief.should_push_for_action and brief.suggested_next_step and not any(marker in combined for marker in ("next move", "start with", "touch it next")):
                 return True
-            if "captured" not in combined and "next move" not in combined:
+            if not any(marker in combined for marker in ("captured", "on the board", "on deck", "start with", "got it", "bet")):
                 return True
 
         if brief.response_goal == "confirm_update":
-            if not any(marker in combined for marker in ("updated", "cleared", "noted", "applied", "archived", "done", "marked")):
+            if not any(marker in combined for marker in ("updated", "cleared", "noted", "applied", "archived", "done", "marked", "bet", "off the board", "dropped", "took")):
                 return True
             if "under control" in combined:
                 return True
 
         if brief.response_goal == "replan_blocker":
-            if not any(marker in combined for marker in ("blocker", "unblock", "unstick", "next move", "first")):
+            if not any(marker in combined for marker in ("blocker", "unblock", "unstick", "next move", "first", "shifts the plan", "clear")):
                 return True
 
         if brief.response_goal == "timeline_summary":

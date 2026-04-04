@@ -15,6 +15,15 @@ class IntentExtractor:
         r"review|fix|build|make|do|call|email|text|update|work on|start|complete|wrap|clean|buy|plan|"
         r"schedule|reply|apply|pay|draft|upload|design|model|export|print)"
     )
+    _WINDOWED_ACTION_VERBS = (
+        "send ",
+        "email ",
+        "text ",
+        "call ",
+        "reply ",
+        "submit ",
+        "upload ",
+    )
 
     def __init__(self, adapter: OllamaAdapter | None = None) -> None:
         self.adapter = adapter or OllamaAdapter()
@@ -132,6 +141,8 @@ class IntentExtractor:
         looks_timeline_query = any(token in lowered for token in timeline_query_cues)
         candidate_tasks = self._extract_tasks_from_text(text, timezone)
         looks_add_task = bool(candidate_tasks) or any(token in lowered for token in ["need to", "have to", "gotta", "assignment"])
+        has_context_signal = any(token in lowered for token in ["in class", "driving", "at dinner", "all nighter", "in a meeting"])
+        placeholder_assignment = self._placeholder_assignment_task(lowered, timezone)
         if looks_timeline_query and ("?" in lowered or lowered.startswith("what do i") or lowered.startswith("what's due")):
             looks_add_task = False
         if " due " in f" {lowered} " and not looks_timeline_query:
@@ -142,7 +153,18 @@ class IntentExtractor:
         context_signal = None
         task: ExtractedTask | None = None
 
-        if any(token in lowered for token in ["in class", "driving", "at dinner", "all nighter", "in a meeting"]):
+        if has_context_signal and (candidate_tasks or placeholder_assignment):
+            tasks = candidate_tasks or ([placeholder_assignment] if placeholder_assignment else [])
+            primary = tasks[0] if tasks else None
+            return IntentResult(
+                intent="add_task",
+                confidence=0.84 if tasks else 0.76,
+                context_signal=lowered,
+                task=primary,
+                tasks=tasks,
+                summary=f"captured {len(tasks)} task{'s' if len(tasks) != 1 else ''} while user is unavailable",
+            )
+        if has_context_signal:
             intent = "context_signal"
             context_signal = lowered
             confidence = 0.82
@@ -354,6 +376,9 @@ class IntentExtractor:
     @staticmethod
     def _extract_deadline_phrase(text: str) -> str | None:
         patterns = [
+            r"\bby [^,.;!?]+",
+            r"\bdue [^,.;!?]+",
+            r"\bbefore [^,.;!?]+",
             r"\bby eod\b",
             r"\beod\b",
             r"\btomorrow(?: morning| night)?\b",
@@ -362,9 +387,6 @@ class IntentExtractor:
             r"\blater\b",
             r"\bafter class\b",
             r"\bbefore studio\b",
-            r"\bby [^,.;!?]+",
-            r"\bdue [^,.;!?]+",
-            r"\bbefore [^,.;!?]+",
         ]
         for pattern in patterns:
             match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -415,12 +437,26 @@ class IntentExtractor:
         if parsed_deadline:
             task_confidence = max(task_confidence, min(0.9, parsed_deadline.confidence + 0.1))
 
+        start_after = self._action_window_start(
+            segment=segment,
+            title=title,
+            deadline_text=deadline_text,
+            parsed_deadline=parsed_deadline,
+        )
+        next_step = self._windowed_action_prep_step(
+            title=title,
+            deadline_text=deadline_text,
+            start_after=start_after,
+        )
+
         return ExtractedTask(
             title=title,
             deadline_text=deadline_text,
             deadline_at=parsed_deadline.deadline_at if parsed_deadline else None,
             soft_deadline_at=parsed_deadline.soft_deadline_at if parsed_deadline else None,
+            start_after=start_after,
             confidence=task_confidence,
+            next_step=next_step,
             deadline=parsed_deadline,
         )
 
@@ -486,6 +522,60 @@ class IntentExtractor:
     @staticmethod
     def _parse_deadline(deadline_text: str, timezone: str) -> ParsedDeadline:
         return interpret_time_reference(deadline_text, timezone=timezone)
+
+    @classmethod
+    def _action_window_start(
+        cls,
+        *,
+        segment: str,
+        title: str,
+        deadline_text: str | None,
+        parsed_deadline: ParsedDeadline | None,
+    ) -> datetime | None:
+        if not deadline_text or not parsed_deadline:
+            return None
+        lowered_phrase = deadline_text.lower().strip()
+        if lowered_phrase.startswith(("by ", "before ", "due ")):
+            return None
+        if parsed_deadline.granularity not in {"hour", "part_of_day"}:
+            return None
+        lowered_title = title.lower().strip()
+        if not any(lowered_title.startswith(prefix) for prefix in cls._WINDOWED_ACTION_VERBS):
+            return None
+        lowered_segment = segment.lower()
+        if any(token in lowered_segment for token in ("as soon as", "right away", "before then", "before it closes")):
+            return None
+        return parsed_deadline.soft_deadline_at
+
+    @staticmethod
+    def _windowed_action_prep_step(
+        *,
+        title: str,
+        deadline_text: str | None,
+        start_after: datetime | None,
+    ) -> str | None:
+        if not deadline_text or start_after is None:
+            return None
+        lowered = title.lower()
+        when = deadline_text.lower().strip()
+        if lowered.startswith("send "):
+            target = title[5:] if len(title) > 5 else "it"
+            return f"draft {target.lower()} so it's ready to send {when}"
+        if lowered.startswith("email "):
+            target = title[6:] if len(title) > 6 else "it"
+            return f"draft the email so it's ready {when}"
+        if lowered.startswith("text "):
+            target = title[5:] if len(title) > 5 else "it"
+            return f"figure out the text now so it's ready to send {when}"
+        if lowered.startswith("call "):
+            return f"line up what you need before the call {when}"
+        if lowered.startswith("reply "):
+            return f"draft the reply so it's ready {when}"
+        if lowered.startswith("submit "):
+            return f"get it finalized so it's ready to submit {when}"
+        if lowered.startswith("upload "):
+            return f"get the file ready so it's ready to upload {when}"
+        return None
 
     def _split_task_segments(self, text: str) -> list[str]:
         normalized = re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
@@ -658,6 +748,22 @@ class IntentExtractor:
         if "?" in text and "plan for" in text:
             return True
         return bool(re.search(r"\bwhat(?:'s| is)\s+the\s+plan\s+for\b", text))
+
+    @staticmethod
+    def _placeholder_assignment_task(text: str, timezone: str) -> ExtractedTask | None:  # noqa: ARG004
+        if re.search(r"\b(prof|professor)\b.*\b(dropped|posted|assigned)\b.*\bassignment\b", text):
+            return ExtractedTask(
+                title="New assignment from professor",
+                confidence=0.56,
+                next_step="send me the assignment details once you're free",
+            )
+        if re.search(r"\b(new|another)\s+assignment\b", text):
+            return ExtractedTask(
+                title="New assignment",
+                confidence=0.5,
+                next_step="send me the assignment details once you're free",
+            )
+        return None
 
 
 class ImageAssignmentExtractor:

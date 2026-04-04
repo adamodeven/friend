@@ -222,6 +222,28 @@ def test_ambiguous_time_sets_clarification_hint():
     assert result.task.deadline.is_ambiguous is True
 
 
+def test_send_email_tomorrow_morning_becomes_windowed_action_not_immediate_deadline():
+    extractor = IntentExtractor()
+    result = extractor.extract("need to send that email tomorrow morning", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert result.task.title == "Send that email"
+    assert result.task.start_after is not None
+    assert result.task.deadline is not None
+    assert result.task.deadline.source_phrase == "tomorrow morning"
+    assert result.task.next_step is not None
+    assert "ready to send tomorrow morning" in result.task.next_step.lower()
+
+
+def test_mixed_assignment_and_context_creates_placeholder_task_and_context_signal():
+    extractor = IntentExtractor()
+    result = extractor.extract("prof just dropped another assignment and i'm in class rn", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.context_signal is not None
+    assert result.task is not None
+    assert "assignment" in result.task.title.lower()
+
+
 def test_weekend_time_stays_ambiguous_without_forcing_clarification():
     adapter = _CountingAdapter()
     extractor = IntentExtractor(adapter=adapter)

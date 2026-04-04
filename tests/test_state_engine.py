@@ -67,9 +67,9 @@ def test_add_task_persists_multiple_tasks_subtasks_and_dependencies(db_session):
     assert email_task.status == TaskStatus.blocked
     assert {dependency.predecessor_task_id for dependency in dependencies} == {subtask.id, prerequisite.id}
     assert outcome.is_multi_task_turn is True
-    assert any("captured 2 tasks" in fact for fact in outcome.key_facts_to_include)
-    assert any("split out 1 subtasks" in fact for fact in outcome.key_facts_to_include)
-    assert any("linked" in fact for fact in outcome.key_facts_to_include)
+    assert any("got 2 things" in fact for fact in outcome.key_facts_to_include)
+    assert any("split out 1 smaller steps" in fact for fact in outcome.key_facts_to_include)
+    assert any("dependency" in fact for fact in outcome.key_facts_to_include)
 
 
 def test_context_signal_creates_schedule_block(db_session):
@@ -82,6 +82,39 @@ def test_context_signal_creates_schedule_block(db_session):
     block = db_session.execute(select(ScheduleBlock)).scalars().first()
     assert block is not None
     assert block.block_type == "in_class"
+
+
+def test_add_task_with_context_signal_captures_placeholder_and_backs_off(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+    intent = IntentResult(
+        intent="add_task",
+        confidence=0.84,
+        context_signal="prof just dropped another assignment and i'm in class rn",
+        task=ExtractedTask(
+            title="New assignment from professor",
+            confidence=0.56,
+            next_step="send me the assignment details once you're free",
+        ),
+    )
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="prof just dropped another assignment and i'm in class rn",
+    )
+    db_session.commit()
+
+    task = db_session.execute(select(Task).where(Task.title == "New assignment from professor")).scalars().first()
+    block = db_session.execute(select(ScheduleBlock).order_by(ScheduleBlock.created_at.desc())).scalars().first()
+
+    assert task is not None
+    assert block is not None
+    assert block.block_type == "in_class"
+    assert outcome.should_push_for_action is False
+    assert outcome.should_ask_question is True
+    assert outcome.question_if_needed is not None
 
 
 def test_status_query_meta_gets_direct_explanation(db_session):
@@ -202,7 +235,7 @@ def test_bulk_clear_archives_active_tasks_and_pending_reminders(db_session):
     assert reminder is not None
     assert reminder.status == ReminderStatus.skipped
     assert outcome.response_goal == "confirm_update"
-    assert any("cleared active task list" in fact for fact in outcome.key_facts_to_include)
+    assert any("cleared the board" in fact for fact in outcome.key_facts_to_include)
 
 
 def test_timeline_query_tomorrow_morning_routes_to_specific_window(db_session):
@@ -327,7 +360,7 @@ def test_archive_task_action_really_archives_task_and_skips_reminders(db_session
     assert refreshed_blocked is not None
     assert refreshed_blocked.status == TaskStatus.active
     assert reminder.status == ReminderStatus.skipped
-    assert any(fact == "archived task: Fix website" for fact in outcome.key_facts_to_include)
+    assert any(fact == "took Fix website off the board" for fact in outcome.key_facts_to_include)
     assert outcome.should_ask_question is False
 
 

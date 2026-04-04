@@ -46,6 +46,7 @@ class ExtractedTask(BaseModel):
     deadline_text: str | None = None
     deadline_at: datetime | None = None
     soft_deadline_at: datetime | None = None
+    start_after: datetime | None = None
     priority: int = Field(default=2, ge=1, le=5)
     confidence: float = Field(default=0.6, ge=0, le=1)
     next_step: str | None = None

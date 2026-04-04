@@ -53,7 +53,7 @@ class TimelineService:
         start = tomorrow.replace(hour=6, minute=0, second=0, microsecond=0)
         end = tomorrow.replace(hour=12, minute=0, second=0, microsecond=0)
         ranked = self._ranked_tasks(session, user_id, timezone, horizon=end)
-        filtered = [rank for rank in ranked if self._is_due_between(rank.task, start, end) or rank.unlocks]
+        filtered = [rank for rank in ranked if self._is_due_between(rank.task, start, end) or self._starts_between(rank.task, start, end) or rank.unlocks]
         if not filtered:
             return "tomorrow morning is open in the system right now."
         return self._render_plan("tomorrow morning plan", filtered[:5], timezone)
@@ -150,34 +150,49 @@ class TimelineService:
         for task in tasks:
             unresolved = [pred for pred in predecessors[task.id] if pred.status != TaskStatus.completed]
             unlocks = [succ for succ in successors[task.id] if succ.status in {TaskStatus.active, TaskStatus.blocked}]
-            actionable = task.status == TaskStatus.active and not unresolved
+            start_after = self._ensure_tz(task.start_after, now.tzinfo) if task.start_after else None
+            actionable = task.status == TaskStatus.active and not unresolved and (start_after is None or start_after <= now)
 
             score = task.priority * 18
             due_at = self._ensure_tz(task.deadline_at, now.tzinfo) if task.deadline_at else None
             due_label: str | None = None
+            if start_after is not None and start_after > now:
+                wait_delta = start_after - now
+                score -= 220
+                if wait_delta <= timedelta(hours=12):
+                    due_label = f"for {start_after.astimezone(ZoneInfo(timezone)).strftime('%-I:%M%p').lower()}"
+                else:
+                    due_label = f"for {start_after.astimezone(ZoneInfo(timezone)).strftime('%a %-m/%-d %-I:%M%p').lower()}"
             if due_at is not None:
                 delta = due_at - now
                 if delta <= timedelta(0):
                     score += 420
-                    due_label = "now"
+                    if start_after is None or start_after <= now:
+                        due_label = "now"
                 elif delta <= timedelta(hours=2):
                     score += 360
-                    due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%-I:%M%p").lower()
+                    if start_after is None or start_after <= now:
+                        due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%-I:%M%p").lower()
                 elif delta <= timedelta(hours=8):
                     score += 310
-                    due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%-I:%M%p").lower()
+                    if start_after is None or start_after <= now:
+                        due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%-I:%M%p").lower()
                 elif delta <= timedelta(days=1):
                     score += 250
-                    due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%-I:%M%p").lower()
+                    if start_after is None or start_after <= now:
+                        due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%-I:%M%p").lower()
                 elif delta <= timedelta(days=3):
                     score += 180
-                    due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%a %-m/%-d").lower()
+                    if start_after is None or start_after <= now:
+                        due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%a %-m/%-d").lower()
                 elif delta <= timedelta(days=7):
                     score += 120
-                    due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%a %-m/%-d").lower()
+                    if start_after is None or start_after <= now:
+                        due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%a %-m/%-d").lower()
                 elif due_at <= horizon:
                     score += 80
-                    due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%a %-m/%-d").lower()
+                    if start_after is None or start_after <= now:
+                        due_label = due_at.astimezone(ZoneInfo(timezone)).strftime("%a %-m/%-d").lower()
             else:
                 score += 45
 
@@ -210,6 +225,8 @@ class TimelineService:
                 score += 15
             if task.slip_count > 0:
                 score += min(task.slip_count, 3) * 8
+            if start_after is not None and start_after > now and task.next_step:
+                score += 35
 
             ranked.append(
                 RankedTask(
@@ -240,7 +257,10 @@ class TimelineService:
             bits: list[str] = []
             if rank.due_label:
                 prefix = "overdue" if rank.due_label == "now" and rank.due_at and rank.due_at <= datetime.now(tz=ZoneInfo(timezone)) else "due"
-                bits.append(f"{prefix} {rank.due_label}")
+                if rank.due_label.startswith("for "):
+                    bits.append(rank.due_label)
+                else:
+                    bits.append(f"{prefix} {rank.due_label}")
             if rank.unlocks:
                 bits.append(f"unlocks {rank.unlocks[0]}")
             if not rank.actionable and rank.blocked_by:
@@ -249,7 +269,7 @@ class TimelineService:
                 bits.append(f"blocked: {rank.task.blocked_reason[:48]}")
             line = f"{index}. {rank.task.title}"
             if bits:
-                line = f"{line} - {'; '.join(bits)}"
+                line = f"{line} - {', '.join(bits)}"
             lines.append(line)
         return "\n".join(lines)
 
@@ -276,6 +296,13 @@ class TimelineService:
             return False
         due_at = task.deadline_at if task.deadline_at.tzinfo else task.deadline_at.replace(tzinfo=start.tzinfo)
         return start <= due_at <= end
+
+    @staticmethod
+    def _starts_between(task: Task, start: datetime, end: datetime) -> bool:
+        if task.start_after is None:
+            return False
+        start_after = task.start_after if task.start_after.tzinfo else task.start_after.replace(tzinfo=start.tzinfo)
+        return start <= start_after <= end
 
     @staticmethod
     def _default_move_text(task_title: str) -> str:

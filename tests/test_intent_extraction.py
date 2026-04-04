@@ -212,6 +212,15 @@ def test_followup_time_correction_strips_informal_do_and_instead():
     assert result.task_updates.get("action") == "reschedule"
 
 
+def test_assignment_detail_followup_is_not_misclassified_as_time_only_reschedule():
+    extractor = IntentExtractor()
+    result = extractor.extract("actually its for studio and due tuesday night", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert result.task.title == "New assignment from studio"
+    assert result.task.deadline_text == "tuesday night"
+
+
 def test_dont_let_me_forget_intake_creates_reminder_style_task():
     extractor = IntentExtractor()
     result = extractor.extract("yo dont let me forget to email the scout recruiter tmr morning", "America/New_York")

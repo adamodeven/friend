@@ -162,6 +162,7 @@ class IntentExtractor:
         )
         has_context_signal = any(token in lowered for token in ["in class", "driving", "at dinner", "all nighter", "in a meeting"])
         placeholder_assignment = self._placeholder_assignment_task(lowered, timezone)
+        assignment_detail = self._assignment_detail_task(lowered, timezone)
         if looks_timeline_query and ("?" in lowered or lowered.startswith("what do i") or lowered.startswith("what's due")):
             looks_add_task = False
         if " due " in f" {lowered} " and not looks_timeline_query:
@@ -204,7 +205,11 @@ class IntentExtractor:
             return IntentResult(intent=intent, confidence=confidence, summary="user asked assistant capabilities")
         elif looks_add_task:
             intent = "add_task"
-            tasks = [placeholder_assignment] if placeholder_assignment else ([reminder_task] if reminder_task else (candidate_tasks or self._extract_tasks_from_text(lowered, timezone)))
+            tasks = [placeholder_assignment] if placeholder_assignment else (
+                [assignment_detail] if assignment_detail else (
+                    [reminder_task] if reminder_task else (candidate_tasks or self._extract_tasks_from_text(lowered, timezone))
+                )
+            )
             if not tasks:
                 extracted_title = self._simple_task_title(lowered)
                 deadline_text = self._extract_deadline_phrase(lowered)
@@ -878,10 +883,37 @@ class IntentExtractor:
         candidate = re.sub(r"\s+instead$", "", candidate).strip()
         candidate = re.sub(r"^(for|on|to)\s+", "", candidate).strip()
         candidate = re.sub(r"\s+", " ", candidate)
+        if not cls._looks_like_followup_time_phrase(candidate):
+            return None
         parsed = interpret_time_reference(candidate, timezone=timezone)
         if parsed.source_phrase and (parsed.deadline_at or parsed.soft_deadline_at):
             return candidate
         return None
+
+    @staticmethod
+    def _looks_like_followup_time_phrase(text: str) -> bool:
+        lowered = text.lower().strip()
+        if not lowered:
+            return False
+        if re.fullmatch(
+            r"(today|tonight|tomorrow|tomorrow morning|tomorrow night|tmr|tmr morning|tmr night|"
+            r"later|this weekend|weekend|by eod|eod|after class|before studio|"
+            r"monday(?: morning| afternoon| evening| night)?|tuesday(?: morning| afternoon| evening| night)?|"
+            r"wednesday(?: morning| afternoon| evening| night)?|thursday(?: morning| afternoon| evening| night)?|"
+            r"friday(?: morning| afternoon| evening| night)?|saturday(?: morning| afternoon| evening| night)?|"
+            r"sunday(?: morning| afternoon| evening| night)?)",
+            lowered,
+        ):
+            return True
+        word_count = len(re.findall(r"[a-z0-9:]+", lowered))
+        if word_count > 3:
+            return False
+        if re.search(
+            r"\b(assignment|studio|prof|professor|class|website|scout|cad|email|text|call|reply|submit|finish|fix|build|write|send)\b",
+            lowered,
+        ):
+            return False
+        return True
 
     @staticmethod
     def _is_attachment_reference_message(text: str) -> bool:
@@ -926,6 +958,39 @@ class IntentExtractor:
                 next_step="send me the assignment details once you're free",
             )
         return None
+
+    @staticmethod
+    def _assignment_detail_task(text: str, timezone: str) -> ExtractedTask | None:
+        if "due" not in text:
+            return None
+        if re.search(rf"\b{IntentExtractor._TASK_START_PATTERN}\b", text):
+            return None
+        source = None
+        if re.search(r"\bstudio\b", text):
+            source = "studio"
+        elif re.search(r"\bclass\b", text):
+            source = "class"
+        elif re.search(r"\b(prof|professor)\b", text):
+            source = "professor"
+        elif re.search(r"\b(course|project)\b", text):
+            source = "course"
+        if source is None:
+            return None
+        due_match = re.search(r"\bdue\s+(.+)$", text)
+        if due_match is None:
+            return None
+        due_text = due_match.group(1).strip(" .,!?")
+        parsed = interpret_time_reference(due_text, timezone=timezone)
+        if parsed.deadline_at is None and parsed.soft_deadline_at is None:
+            return None
+        title = f"New assignment from {source}"
+        return ExtractedTask(
+            title=title,
+            deadline_text=due_text,
+            deadline=parsed,
+            confidence=0.68,
+            next_step="send me the actual assignment details when you can and i'll sort it out",
+        )
 
     @staticmethod
     def _is_placeholder_assignment_title(title: str | None) -> bool:

@@ -1400,6 +1400,13 @@ class StateEngine:
         if indexed is not None and indexed.parent_task_id == parent_task_id:
             return indexed
         for task in list_active_tasks(session, user_id):
+            if (
+                StateEngine._is_placeholder_assignment_title(task.title)
+                and StateEngine._is_placeholder_assignment_title(title)
+                and task.parent_task_id == parent_task_id
+            ):
+                title_index.setdefault(normalized, task)
+                return task
             if StateEngine._normalize_title(task.title) != normalized:
                 continue
             if task.parent_task_id != parent_task_id:
@@ -1429,6 +1436,8 @@ class StateEngine:
             task.description = extracted.description
         if project_id and task.project_id is None:
             task.project_id = project_id
+        if self._should_refine_placeholder_title(task.title, extracted.title):
+            task.title = extracted.title
         task.priority = max(task.priority, extracted.priority)
         task.extraction_confidence = max(task.extraction_confidence, extracted.confidence)
         if next_step and (task.next_step is None or task.next_step == self._default_next_step(task.title, action_kind=self._task_action_kind(task))):
@@ -1669,6 +1678,23 @@ class StateEngine:
     @staticmethod
     def _normalize_title(title: str) -> str:
         return re.sub(r"\s+", " ", title.strip().lower())
+
+    @staticmethod
+    def _is_placeholder_assignment_title(title: str | None) -> bool:
+        lowered = (title or "").strip().lower()
+        return lowered.startswith("new assignment")
+
+    @classmethod
+    def _should_refine_placeholder_title(cls, current_title: str | None, new_title: str | None) -> bool:
+        if not cls._is_placeholder_assignment_title(current_title) or not cls._is_placeholder_assignment_title(new_title):
+            return False
+        current = cls._normalize_title(current_title or "")
+        new = cls._normalize_title(new_title or "")
+        if current == new:
+            return False
+        if " from " in new:
+            return True
+        return len(new) > len(current)
 
     @staticmethod
     def _canonicalize_dependency_title(title: str) -> str | None:

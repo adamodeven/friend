@@ -121,6 +121,50 @@ def test_add_task_with_context_signal_captures_placeholder_and_backs_off(db_sess
     assert any("class first" in fact for fact in outcome.key_facts_to_include)
 
 
+def test_assignment_detail_followup_reuses_and_refines_existing_placeholder_task(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+    first = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="add_task",
+            confidence=0.84,
+            context_signal="prof just dropped another assignment and i'm in class rn",
+            task=ExtractedTask(
+                title="New assignment from professor",
+                confidence=0.56,
+                next_step="send me the assignment details once you're free",
+            ),
+        ),
+        raw_text="prof just dropped another assignment and i'm in class rn",
+    )
+    assert first.response_goal == "acknowledge_new_task"
+
+    followup = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="add_task",
+            confidence=0.68,
+            task=ExtractedTask(
+                title="New assignment from studio",
+                deadline_text="tuesday night",
+            ),
+        ),
+        raw_text="actually its for studio and due tuesday night",
+    )
+    db_session.commit()
+
+    tasks = db_session.execute(select(Task).where(Task.user_id == user.id)).scalars().all()
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task.title == "New assignment from studio"
+    assert task.deadline_source_phrase == "tuesday night"
+    assert followup.response_goal == "acknowledge_new_task"
+
+
 def test_status_query_meta_gets_direct_explanation(db_session):
     user = db_session.execute(select(User)).scalars().first()
     engine = StateEngine()

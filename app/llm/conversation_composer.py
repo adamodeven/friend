@@ -603,6 +603,8 @@ class ConversationComposer:
             suffix = suffix.strip()
             if heading and cls._normalize_text(suffix) == cls._normalize_text(f"for {heading}"):
                 cleaned = title.strip()
+            elif heading in {"today", "tonight"} and suffix.lower().startswith("due "):
+                cleaned = title.strip()
             elif suffix:
                 cleaned = f"{title.strip()} {suffix}"
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" .")
@@ -1055,6 +1057,7 @@ class ConversationComposer:
         softened = re.sub(r"\bi deleted ([^.?!]+)", r"i took \1 out", softened, flags=re.IGNORECASE)
         softened = re.sub(r"\bi archived ([^.?!]+)", r"i took \1 out", softened, flags=re.IGNORECASE)
         softened = re.sub(r"\b([a-z ]+?) looks open right now\b", r"\1's clear right now", softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\bi['’]ve got it queued\b", "i've got it", softened, flags=re.IGNORECASE)
         return re.sub(r"\s{2,}", " ", softened).strip()
 
     @staticmethod

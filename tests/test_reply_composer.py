@@ -839,6 +839,7 @@ def test_timeline_summary_uses_more_human_plan_framing_for_tonight():
     assert "tonight i'd start with" in lowered
     assert "finish the enclosure cad" in lowered
     assert "pay rent" in lowered
+    assert "due sun" not in lowered
 
 
 def test_timeline_summary_empty_window_reads_more_naturally():
@@ -852,3 +853,18 @@ def test_timeline_summary_empty_window_reads_more_naturally():
         ),
     )
     assert messages == ["monday morning's clear right now"]
+
+
+def test_postprocess_softens_queued_language():
+    brief = ReplyBrief(
+        response_goal="acknowledge_new_task",
+        latest_user_message="actually its for studio and due tuesday night",
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
+        ["got it, studio assignment due tuesday night.", "i've got it queued."],
+        brief,
+    )
+    lowered = " ".join(messages).lower()
+    assert "queued" not in lowered
+    assert "i've got it" in lowered

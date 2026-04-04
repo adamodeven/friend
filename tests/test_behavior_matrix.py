@@ -194,7 +194,7 @@ def test_state_matrix_placeholder_assignment_without_details_prompts_for_followu
         raw_text="just got another assignment from studio",
     )
     assert outcome.should_ask_question is True
-    assert "assignment details" in (outcome.question_if_needed or "")
+    assert "send me the details" in (outcome.question_if_needed or "")
 
 
 def test_state_matrix_prefers_real_work_over_future_quick_message_in_same_turn(db_session):

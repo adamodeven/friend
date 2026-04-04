@@ -199,14 +199,14 @@ class StateEngine:
 
             if needs_post_context_followup and not outcome.should_ask_question:
                 outcome.should_ask_question = True
-                outcome.question_if_needed = "when you're out, send me the assignment details and i'll slot it cleanly"
+                outcome.question_if_needed = "when you're out, send me the details and i'll slot it cleanly"
             elif (
                 len(bundle.root_tasks) == 1
                 and self._placeholder_assignment_needs_details(bundle.root_tasks)
                 and not outcome.should_ask_question
             ):
                 outcome.should_ask_question = True
-                outcome.question_if_needed = "send me the assignment details when you have them and i'll slot it cleanly"
+                outcome.question_if_needed = "send me the details when you have them and i'll slot it cleanly"
                 outcome.should_push_for_action = False
                 outcome.suggested_next_step = None
 
@@ -1563,12 +1563,13 @@ class StateEngine:
 
     def _new_task_fact(self, task: Task, timezone_name: str) -> str:
         action_kind = self._task_action_kind(task)
-        lowered_title = task.title[0].lower() + task.title[1:] if task.title else "it"
         time_phrase = humanize_window_phrase(task.deadline_source_phrase)
         if self._looks_like_placeholder_assignment([task]):
+            label = self._placeholder_assignment_label(task.title)
             if time_phrase:
-                return f"got it, {lowered_title} is due {time_phrase}"
-            return f"looks like a {lowered_title} just landed"
+                return f"got it, {label} is due {time_phrase}"
+            return f"got you, sounds like {label} just came in"
+        lowered_title = task.title[0].lower() + task.title[1:] if task.title else "it"
         if action_kind == ACTION_KIND_QUICK_MESSAGE and time_phrase:
             return self._quick_reminder_fact(time_phrase, is_admin=False)
         if action_kind == ACTION_KIND_QUICK_ADMIN and time_phrase:
@@ -1677,6 +1678,17 @@ class StateEngine:
         if is_admin:
             return "okay bet, i'll keep tabs on it"
         return "okay bet, i'll remind you"
+
+    @staticmethod
+    def _placeholder_assignment_label(title: str) -> str:
+        lowered = title.strip().lower()
+        if lowered.startswith("new assignment from "):
+            source = lowered.replace("new assignment from ", "", 1).strip()
+            if source:
+                return f"that {source} assignment"
+        if lowered.startswith("new assignment"):
+            return "that assignment"
+        return title
 
     @staticmethod
     def _timeline_custom_window(raw_text: str, timezone_name: str) -> tuple[str, datetime, datetime] | None:

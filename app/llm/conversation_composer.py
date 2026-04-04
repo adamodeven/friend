@@ -460,6 +460,13 @@ class ConversationComposer:
         cleaned = self._sanitize_fallback_text(summary)
         if not cleaned:
             return ""
+        return self._flatten_static_timeline_summary(cleaned)
+
+    @classmethod
+    def _flatten_static_timeline_summary(cls, summary: str) -> str:
+        cleaned = cls._sanitize_fallback_text(summary)
+        if not cleaned:
+            return ""
 
         lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
         if not lines:
@@ -792,6 +799,12 @@ class ConversationComposer:
             if len(messages) > 1:
                 return messages[1:]
             return []
+        if brief.response_goal == "timeline_summary":
+            latest = brief.latest_user_message.strip().lower().rstrip("?")
+            if latest and first.lower().startswith(latest):
+                summary = brief.key_facts_to_include[0] if brief.key_facts_to_include else ""
+                repaired = cls._flatten_static_timeline_summary(summary)
+                return [repaired] if repaired else []
         if brief.response_goal == "answer_question" and first.endswith("?") and len(messages) > 1:
             return messages[1:]
         if brief.response_goal == "confirm_update" and cls._looks_like_timing_shift_reply(brief, first):

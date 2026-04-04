@@ -692,3 +692,19 @@ def test_postprocess_drops_redundant_ack_after_timing_shift():
         brief,
     )
     assert messages == ["okay monday morning"]
+
+
+def test_postprocess_repairs_timeline_reply_that_repeats_user_question():
+    brief = ReplyBrief(
+        response_goal="timeline_summary",
+        latest_user_message="what do i have on monday morning",
+        key_facts_to_include=["monday morning\n1. Email the scout recruiter - for monday morning"],
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
+        ["what do i have on monday morning, 1. Email the scout recruiter - for monday morning"],
+        brief,
+    )
+    lowered = " ".join(messages).lower()
+    assert not lowered.startswith("what do i have on monday morning")
+    assert "email the scout recruiter" in lowered

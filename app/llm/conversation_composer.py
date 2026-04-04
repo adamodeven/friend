@@ -62,14 +62,15 @@ class ConversationComposer:
 
         if brief.response_goal == "timeline_summary":
             summary = brief.key_facts_to_include[0] if brief.key_facts_to_include else ""
-            flattened = self._flatten_timeline_summary(summary)
-            if flattened:
-                return self.chunker.chunk(
-                    flattened,
+            shortcut_messages = self._timeline_summary_shortcut_messages(summary, max_chunks=min(brief.max_chunks, 3))
+            if shortcut_messages:
+                normalized = self.chunker.normalize_messages(
+                    shortcut_messages,
                     max_chunk_length=brief.max_chunk_length,
-                    max_chunks=min(brief.max_chunks, 2),
+                    max_chunks=min(brief.max_chunks, 3),
                     soft_chunk_length=style_profile.soft_chunk_chars,
                 )
+                return normalized
 
         if (
             brief.response_goal == "acknowledge_new_task"
@@ -565,17 +566,51 @@ class ConversationComposer:
         cleaned = self._sanitize_fallback_text(summary)
         if not cleaned:
             return ""
+        shortcut_messages = self._timeline_summary_shortcut_messages(cleaned, max_chunks=2)
+        if shortcut_messages:
+            return " ".join(shortcut_messages)
         return self._flatten_static_timeline_summary(cleaned)
 
     @classmethod
-    def _flatten_static_timeline_summary(cls, summary: str) -> str:
+    def _timeline_summary_shortcut_messages(cls, summary: str, *, max_chunks: int) -> list[str]:
         cleaned = cls._sanitize_fallback_text(summary)
         if not cleaned:
-            return ""
+            return []
+        heading, compact_items = cls._timeline_heading_and_items(cleaned)
+        if not compact_items:
+            if heading:
+                return [f"{heading}'s clear right now."]
+            return []
 
-        lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+        messages: list[str] = []
+        if heading:
+            if heading in {"today", "tonight", "this week", "weekend"}:
+                messages.append(f"{heading} i'd keep it on {compact_items[0]}.")
+                for item in compact_items[1:]:
+                    messages.append(cls._timeline_followup_bubble(item))
+                return messages[:max_chunks]
+            if cls._is_time_window_heading(heading):
+                messages.append(
+                    f"{heading} it's just {compact_items[0]}." if len(compact_items) == 1 else f"{heading} it's {compact_items[0]}."
+                )
+                for item in compact_items[1:]:
+                    messages.append(cls._timeline_followup_bubble(item))
+                return messages[:max_chunks]
+            messages.append(f"for {heading}, the main thing is {compact_items[0]}.")
+            for item in compact_items[1:]:
+                messages.append(cls._timeline_followup_bubble(item))
+            return messages[:max_chunks]
+
+        messages.append(compact_items[0])
+        for item in compact_items[1:]:
+            messages.append(cls._timeline_followup_bubble(item))
+        return messages[:max_chunks]
+
+    @classmethod
+    def _timeline_heading_and_items(cls, summary: str) -> tuple[str | None, list[str]]:
+        lines = [line.strip() for line in summary.splitlines() if line.strip()]
         if not lines:
-            return ""
+            return None, []
 
         heading: str | None = None
         items: list[str] = []
@@ -600,13 +635,28 @@ class ConversationComposer:
                 continue
             items.append(bullet)
 
-        if not items:
-            return (f"{heading}'s clear right now." if heading else cleaned)
-
-        compact_items = [cls._humanize_timeline_item(item, heading=heading) for item in items[:3]]
+        compact_items = [cls._humanize_timeline_item(item, heading=heading) for item in items[:4]]
         compact_items = [item for item in compact_items if item]
+        return heading, compact_items
+
+    @staticmethod
+    def _timeline_followup_bubble(item: str) -> str:
+        lowered = item.lower()
+        if lowered.startswith(("the ", "my ", "a ", "an ", "texting ", "calling ")):
+            return f"then {item}."
+        if lowered.startswith(("pay ", "finish ", "fix ", "prep ", "clean ", "build ", "write ", "send ", "update ")):
+            return f"after that {item}."
+        return f"then {item}."
+
+    @classmethod
+    def _flatten_static_timeline_summary(cls, summary: str) -> str:
+        cleaned = cls._sanitize_fallback_text(summary)
+        if not cleaned:
+            return ""
+
+        heading, compact_items = cls._timeline_heading_and_items(cleaned)
         if not compact_items:
-            return f"{heading}'s clear right now." if heading else ""
+            return (f"{heading}'s clear right now." if heading else cleaned)
 
         if heading:
             if heading in {"today", "tonight", "this week", "weekend"}:

@@ -204,6 +204,14 @@ def test_followup_time_correction_maps_to_update_not_new_task():
     assert result.task_updates.get("action") == "reschedule"
 
 
+def test_followup_time_correction_strips_informal_do_and_instead():
+    extractor = IntentExtractor()
+    result = extractor.extract("actually do monday instead", "America/New_York")
+    assert result.intent == "update_task"
+    assert result.time_reference == "monday"
+    assert result.task_updates.get("action") == "reschedule"
+
+
 def test_dont_let_me_forget_intake_creates_reminder_style_task():
     extractor = IntentExtractor()
     result = extractor.extract("yo dont let me forget to email the scout recruiter tmr morning", "America/New_York")

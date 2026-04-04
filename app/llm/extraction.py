@@ -874,6 +874,10 @@ class IntentExtractor:
                 return None
             if len(re.findall(r"[a-z0-9']+", working)) > 4:
                 return None
+        candidate = re.sub(r"^(do|make it|make that|set it|put it)\s+", "", candidate).strip()
+        candidate = re.sub(r"\s+instead$", "", candidate).strip()
+        candidate = re.sub(r"^(for|on|to)\s+", "", candidate).strip()
+        candidate = re.sub(r"\s+", " ", candidate)
         parsed = interpret_time_reference(candidate, timezone=timezone)
         if parsed.source_phrase and (parsed.deadline_at or parsed.soft_deadline_at):
             return candidate

@@ -781,3 +781,14 @@ def test_timeline_summary_shortcuts_past_llm_question_echo():
     lowered = " ".join(reply.messages).lower()
     assert not lowered.startswith("what do i have on monday morning")
     assert "you've got email the scout recruiter" in lowered
+
+
+def test_timeline_summary_humanizes_title_casing_inside_sentence():
+    brief = ReplyBrief(
+        response_goal="timeline_summary",
+        latest_user_message="what do i have on monday morning",
+        key_facts_to_include=["monday morning\n1. Email the scout recruiter - for monday morning"],
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
+    assert messages.messages == ["monday morning you've got email the scout recruiter."]

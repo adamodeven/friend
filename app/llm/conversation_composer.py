@@ -577,6 +577,8 @@ class ConversationComposer:
             elif suffix:
                 cleaned = f"{title.strip()} {suffix}"
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" .")
+        if len(cleaned) >= 2 and cleaned[0].isupper() and cleaned[1].islower():
+            cleaned = cleaned[0].lower() + cleaned[1:]
         return cleaned
 
     @classmethod

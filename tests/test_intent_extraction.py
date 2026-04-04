@@ -211,6 +211,7 @@ def test_dont_let_me_forget_intake_creates_reminder_style_task():
     assert result.task is not None
     assert result.task.title.lower() == "email the scout recruiter"
     assert result.task.deadline_text == "tmr morning"
+    assert result.task.action_kind == "quick_message"
 
 
 def test_fallback_multitask_split_keeps_clean_titles_with_trailing_preposition_removed():

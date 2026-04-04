@@ -24,6 +24,17 @@ class RankedTask:
 
 
 class TimelineService:
+    def build_window_view(self, session: Session, user_id, timezone: str, *, label: str, start: datetime, end: datetime) -> str:
+        ranked = self._ranked_tasks(session, user_id, timezone, horizon=end)
+        filtered = [
+            rank
+            for rank in ranked
+            if self._is_due_between(rank.task, start, end) or self._starts_between(rank.task, start, end) or rank.unlocks
+        ]
+        if not filtered:
+            return f"{label} is open in the system right now."
+        return self._render_plan(label, filtered[:5], timezone)
+
     def build_today_view(self, session: Session, user_id, timezone: str) -> str:
         now = datetime.now(tz=ZoneInfo(timezone))
         end = now.replace(hour=23, minute=59, second=59, microsecond=0)
@@ -53,11 +64,7 @@ class TimelineService:
         tomorrow = now + timedelta(days=1)
         start = tomorrow.replace(hour=6, minute=0, second=0, microsecond=0)
         end = tomorrow.replace(hour=12, minute=0, second=0, microsecond=0)
-        ranked = self._ranked_tasks(session, user_id, timezone, horizon=end)
-        filtered = [rank for rank in ranked if self._is_due_between(rank.task, start, end) or self._starts_between(rank.task, start, end) or rank.unlocks]
-        if not filtered:
-            return "tomorrow morning is open in the system right now."
-        return self._render_plan("tomorrow morning", filtered[:5], timezone)
+        return self.build_window_view(session, user_id, timezone, label="tomorrow morning", start=start, end=end)
 
     def build_weekend_view(self, session: Session, user_id, timezone: str) -> str:
         now = datetime.now(tz=ZoneInfo(timezone))

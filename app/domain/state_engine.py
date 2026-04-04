@@ -138,6 +138,7 @@ class StateEngine:
                 and len(bundle.root_tasks) == 1
                 and not intent.context_signal
                 and not bundle.root_tasks[0].deadline_is_ambiguous
+                and self._task_action_kind(bundle.root_tasks[0]) not in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}
                 and (bundle.root_tasks[0].deadline_at is not None or bundle.root_tasks[0].start_after is not None)
             ):
                 task = bundle.root_tasks[0]
@@ -235,12 +236,21 @@ class StateEngine:
                 summary = self.timeline.build_project_view(session, user.id, user.timezone, raw_text)
             elif "weekend" in lowered:
                 summary = self.timeline.build_weekend_view(session, user.id, user.timezone)
-            elif "tomorrow morning" in lowered:
+            elif "tomorrow morning" in lowered or "tmr morning" in lowered:
                 summary = self.timeline.build_tomorrow_morning_view(session, user.id, user.timezone)
             elif "tonight" in lowered:
                 summary = self.timeline.build_tonight_view(session, user.id, user.timezone)
             elif "next hour" in lowered:
                 summary = self.timeline.next_hour_recommendation(session, user.id, user.timezone)
+            elif custom_window := self._timeline_custom_window(raw_text, user.timezone):
+                summary = self.timeline.build_window_view(
+                    session,
+                    user.id,
+                    user.timezone,
+                    label=custom_window[0],
+                    start=custom_window[1],
+                    end=custom_window[2],
+                )
             elif "week" in lowered:
                 summary = self.timeline.build_week_view(session, user.id, user.timezone)
             else:
@@ -1440,6 +1450,29 @@ class StateEngine:
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
             return "got you"
         return f"got {task.title}"
+
+    @staticmethod
+    def _timeline_custom_window(raw_text: str, timezone_name: str) -> tuple[str, datetime, datetime] | None:
+        lowered = raw_text.lower()
+        if "what" not in lowered and "due" not in lowered and "have" not in lowered:
+            return None
+        parsed = interpret_time_reference(raw_text, timezone=timezone_name)
+        if parsed.granularity not in {"part_of_day", "day"}:
+            return None
+        zone = ZoneInfo(timezone_name)
+        if parsed.soft_deadline_at is None and parsed.deadline_at is None:
+            return None
+        label = parsed.source_phrase.lower() if parsed.source_phrase else "that window"
+        start = parsed.soft_deadline_at or parsed.deadline_at
+        end = parsed.deadline_at or parsed.soft_deadline_at
+        if start is None or end is None:
+            return None
+        start = start.astimezone(zone)
+        end = end.astimezone(zone)
+        if parsed.granularity == "day":
+            start = start.replace(hour=6, minute=0, second=0, microsecond=0)
+            end = end.replace(hour=23, minute=59, second=59, microsecond=0)
+        return label, start, end
 
     @staticmethod
     def _quick_task_subject(title: str) -> str:

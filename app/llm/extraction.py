@@ -147,6 +147,9 @@ class IntentExtractor:
             "this week",
             "tonight",
             "tomorrow morning",
+            "tmr morning",
+            "tomorrow night",
+            "tmr night",
             "this weekend",
             "weekend",
             "next hour",
@@ -447,10 +450,19 @@ class IntentExtractor:
         )
         if task is None:
             return None
-        task.action_kind = task.action_kind or infer_action_kind(task.title, deadline_text=task.deadline_text, start_after=task.start_after)
+        task.action_kind = self._reminder_style_action_kind(task.title)
         task.next_step = None if task.action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN} else task.next_step
         task.confidence = max(task.confidence, 0.84)
         return task
+
+    @staticmethod
+    def _reminder_style_action_kind(title: str) -> str:
+        lowered = title.lower().strip()
+        if lowered.startswith(("email ", "text ", "call ", "reply ", "dm ", "ping ", "send ")):
+            return ACTION_KIND_QUICK_MESSAGE
+        if lowered.startswith(("pay ", "book ", "schedule ", "renew ", "cancel ", "buy ")):
+            return ACTION_KIND_QUICK_ADMIN
+        return infer_action_kind(title)
 
     def _extract_tasks_from_text(self, text: str, timezone: str) -> list[ExtractedTask]:
         tasks: list[ExtractedTask] = []

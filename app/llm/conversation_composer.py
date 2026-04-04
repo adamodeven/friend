@@ -33,6 +33,9 @@ class ConversationComposer:
             self._lightweight_compose_model = settings.ollama_text_model.strip() or self._compose_model
 
     def compose(self, brief: ReplyBrief) -> ComposedReply:
+        shortcut = self._deterministic_shortcut(brief)
+        if shortcut:
+            return ComposedReply(messages=shortcut, used_fallback=False, regenerated_for_repetition=False)
         recent_assistant = [line.split(":", 1)[1].strip() for line in brief.recent_thread if line.startswith("assistant:")]
         messages, regenerated = self._compose_with_llm(brief, recent_assistant)
         if messages:
@@ -52,6 +55,50 @@ class ConversationComposer:
 
         fallback = self._fallback_messages(brief)
         return ComposedReply(messages=fallback, used_fallback=True, regenerated_for_repetition=False)
+
+    def _deterministic_shortcut(self, brief: ReplyBrief) -> list[str] | None:
+        first_fact = self._first_safe_fact(brief)
+        style_profile = get_style_profile(brief.style_mode)
+
+        if brief.response_goal == "timeline_summary":
+            summary = brief.key_facts_to_include[0] if brief.key_facts_to_include else ""
+            flattened = self._flatten_timeline_summary(summary)
+            if flattened:
+                return self.chunker.chunk(
+                    flattened,
+                    max_chunk_length=brief.max_chunk_length,
+                    max_chunks=1,
+                    soft_chunk_length=style_profile.soft_chunk_chars,
+                )
+
+        if (
+            brief.response_goal == "acknowledge_new_task"
+            and first_fact
+            and self._looks_like_reminder_confirm(brief, first_fact)
+            and not brief.should_ask_question
+            and not brief.should_push_for_action
+        ):
+            return self.chunker.chunk(
+                first_fact,
+                max_chunk_length=brief.max_chunk_length,
+                max_chunks=1,
+                soft_chunk_length=style_profile.soft_chunk_chars,
+            )
+
+        if (
+            brief.response_goal == "confirm_update"
+            and first_fact
+            and self._looks_like_timing_shift_reply(brief, first_fact)
+            and not brief.should_ask_question
+        ):
+            return self.chunker.chunk(
+                first_fact,
+                max_chunk_length=brief.max_chunk_length,
+                max_chunks=1,
+                soft_chunk_length=style_profile.soft_chunk_chars,
+            )
+
+        return None
 
     def _compose_with_llm(self, brief: ReplyBrief, recent_assistant: list[str]) -> tuple[list[str] | None, bool]:
         if not self.adapter.enabled:

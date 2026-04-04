@@ -666,6 +666,24 @@ def test_acknowledge_new_task_fallback_keeps_reminder_confirm_short():
     assert "i'll remind you" in lowered
 
 
+def test_acknowledge_new_task_reminder_shortcuts_past_llm_freestyling():
+    adapter = FakeAdapter(
+        ["okay bet, i'll remind you tomorrow morning\n\ngot you"],
+        enabled=True,
+        json_responses=[{"messages": ["okay bet, i'll remind you tomorrow morning", "got you"]}],
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="acknowledge_new_task",
+            latest_user_message="yo dont let me forget to email the scout recruiter tmr morning",
+            key_facts_to_include=["okay bet, i'll remind you"],
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.messages == ["okay bet, i'll remind you"]
+
+
 def test_confirm_update_fallback_keeps_timing_shift_natural():
     adapter = FakeAdapter([], enabled=False)
     composer = ConversationComposer(adapter=adapter)
@@ -679,6 +697,24 @@ def test_confirm_update_fallback_keeps_timing_shift_natural():
     )
     lowered = " ".join(reply.messages).lower()
     assert lowered == "okay bet, i moved it"
+
+
+def test_confirm_update_shortcuts_past_llm_repeating_new_time():
+    adapter = FakeAdapter(
+        ["okay bet, i moved it to monday morning"],
+        enabled=True,
+        json_responses=[{"messages": ["okay bet, i moved it to monday morning"]}],
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="confirm_update",
+            latest_user_message="actually monday morning",
+            key_facts_to_include=["okay bet, i moved it"],
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.messages == ["okay bet, i moved it"]
 
 
 def test_postprocess_drops_redundant_ack_after_timing_shift():
@@ -725,3 +761,23 @@ def test_postprocess_repairs_answer_that_starts_by_repeating_user_question():
     lowered = " ".join(messages).lower()
     assert not lowered.startswith("what do i have on monday morning")
     assert "email the scout recruiter" in lowered
+
+
+def test_timeline_summary_shortcuts_past_llm_question_echo():
+    adapter = FakeAdapter(
+        ["what do i have on monday morning, then Email the scout recruiter for monday morning"],
+        enabled=True,
+        json_responses=[{"messages": ["what do i have on monday morning, then Email the scout recruiter for monday morning"]}],
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="timeline_summary",
+            latest_user_message="what do i have on monday morning",
+            key_facts_to_include=["monday morning\n1. Email the scout recruiter - for monday morning"],
+            generated_at=datetime.now(),
+        )
+    )
+    lowered = " ".join(reply.messages).lower()
+    assert not lowered.startswith("what do i have on monday morning")
+    assert "you've got email the scout recruiter" in lowered

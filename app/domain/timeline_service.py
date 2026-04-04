@@ -32,7 +32,7 @@ class TimelineService:
             if self._is_due_between(rank.task, start, end) or self._starts_between(rank.task, start, end) or rank.unlocks
         ]
         if not filtered:
-            return f"{label} is open in the system right now."
+            return f"{label} looks open right now."
         return self._render_plan(label, filtered[:5], timezone)
 
     def build_today_view(self, session: Session, user_id, timezone: str) -> str:

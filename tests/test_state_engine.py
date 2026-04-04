@@ -69,7 +69,7 @@ def test_add_task_persists_multiple_tasks_subtasks_and_dependencies(db_session):
     assert email_task.status == TaskStatus.blocked
     assert {dependency.predecessor_task_id for dependency in dependencies} == {subtask.id, prerequisite.id}
     assert outcome.is_multi_task_turn is True
-    assert any("2 things on your plate" in fact for fact in outcome.key_facts_to_include)
+    assert any("2 different things" in fact for fact in outcome.key_facts_to_include)
     assert any("broke one of those into 1 smaller step" in fact for fact in outcome.key_facts_to_include)
     assert any("dependency" in fact for fact in outcome.key_facts_to_include)
 
@@ -118,7 +118,7 @@ def test_add_task_with_context_signal_captures_placeholder_and_backs_off(db_sess
     assert outcome.suggested_next_step is None
     assert outcome.should_ask_question is True
     assert outcome.question_if_needed is not None
-    assert any("in class rn" in fact for fact in outcome.key_facts_to_include)
+    assert any("class first" in fact for fact in outcome.key_facts_to_include)
 
 
 def test_status_query_meta_gets_direct_explanation(db_session):
@@ -211,7 +211,7 @@ def test_quick_message_windowed_task_does_not_push_fake_prep_step(db_session):
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_push_for_action is False
     assert outcome.suggested_next_step is None
-    assert any("won't let you forget tomorrow morning" in fact.lower() for fact in outcome.key_facts_to_include)
+    assert any("i'll hit you tomorrow morning" in fact.lower() for fact in outcome.key_facts_to_include)
 
 
 def test_new_task_links_to_source_message_for_followup_context(db_session):
@@ -302,7 +302,7 @@ def test_time_only_followup_updates_recent_relevant_task_instead_of_creating_new
     assert task.deadline_source_phrase == "monday morning"
     assert task.source_message_id == second_inbound.id
     assert outcome.response_goal == "confirm_update"
-    assert outcome.key_facts_to_include == ["moved that to monday morning"]
+    assert outcome.key_facts_to_include == ["okay monday morning"]
 
 
 def test_default_next_step_does_not_repeat_submit_for_submit_titles():
@@ -488,7 +488,7 @@ def test_archive_task_action_really_archives_task_and_skips_reminders(db_session
     assert refreshed_blocked is not None
     assert refreshed_blocked.status == TaskStatus.active
     assert reminder.status == ReminderStatus.skipped
-    assert any(fact == "we're good on Fix website" for fact in outcome.key_facts_to_include)
+    assert any(fact == "we're off Fix website" for fact in outcome.key_facts_to_include)
     assert outcome.should_ask_question is False
 
 
@@ -546,7 +546,7 @@ def test_complete_task_unblocks_successor_and_surfaces_next_action(db_session):
 
     refreshed_successor = db_session.execute(select(Task).where(Task.id == successor.id)).scalars().one()
     assert refreshed_successor.status == TaskStatus.active
-    assert any("that clears Send recruiter email" == fact for fact in outcome.key_facts_to_include)
+    assert any("that frees up Send recruiter email" == fact for fact in outcome.key_facts_to_include)
     assert "send recruiter email" in (outcome.suggested_next_step or "").lower()
 
 

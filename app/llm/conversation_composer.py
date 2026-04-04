@@ -218,6 +218,8 @@ class ConversationComposer:
             "If latest user message is a short greeting/check-in, keep it present-tense and lightweight. "
             "Do not drag in old thread drama unless the user asked about it in this message. "
             "For small-talk or quick checks, do not mirror the user's exact words back. "
+            "If the user just asked for a reminder or corrected the timing, do not restate the whole task back when it's already obvious in the thread. "
+            "For reminder confirms, keep it short and human, like i'll hit you then or okay monday morning. "
             "Do not keep asking the user to hand you another task unless the message clearly calls for it. "
             "Do not use label-style colons like next up: or next move:, unless it's a real clock time. "
             "When you bring up what comes after progress, make it feel like a fresh thought instead of a task-manager label. "
@@ -248,6 +250,7 @@ class ConversationComposer:
             "For casual, off-topic, or meta texts, answer socially first and do not force a task pivot. "
             "If the user is vague or overloaded, reduce cognitive load by choosing one next move. "
             "Reminder-like actions should not be treated like mini projects or given fake first-pass work. "
+            "If the user just asked for a reminder or corrected the timing, do not restate the whole task back when it's already obvious in the thread. "
             "Use a short follow-up question when a vague new obligation needs one detail to plan well. "
             "Urgency should feel clean and real, never corny or fake inspirational. "
             "Do not sound like a database or task tracker. "
@@ -402,7 +405,11 @@ class ConversationComposer:
             base = self._flatten_timeline_summary(summary) or "no hard due items right now."
         elif brief.response_goal == "acknowledge_new_task":
             first_fact = first_fact or "got it."
-            if brief.should_ask_question and brief.question_if_needed:
+            if self._looks_like_reminder_confirm(brief, first_fact):
+                base = first_fact
+                if brief.should_ask_question and brief.question_if_needed:
+                    base = f"{base} {brief.question_if_needed}"
+            elif brief.should_ask_question and brief.question_if_needed:
                 base = f"bet, got it. {first_fact} {brief.question_if_needed}"
             elif brief.suggested_next_step:
                 base = f"bet, got it. {first_fact} if you touch it next, i'd start with {brief.suggested_next_step}"
@@ -421,7 +428,10 @@ class ConversationComposer:
                 base = "got it, that shifts the plan. what's the blocker i should account for first?"
         elif brief.response_goal == "confirm_update":
             fact = first_fact or "update applied."
-            base = f"bet. {fact}"
+            if self._looks_like_timing_shift_reply(brief, fact):
+                base = fact
+            else:
+                base = f"bet. {fact}"
         elif brief.should_ask_question and brief.question_if_needed:
             base = f"{opening} {brief.question_if_needed}"
         elif brief.suggested_next_step:
@@ -692,6 +702,7 @@ class ConversationComposer:
         user_norm = cls._normalize_text(latest_user_message)
         if not user_norm:
             return False
+        lowered_user = latest_user_message.lower()
         user_words = user_norm.split()
         short_checkin_reply_allowlist = {
             "yo i m here",
@@ -705,7 +716,14 @@ class ConversationComposer:
             bubble_norm = cls._normalize_text(bubble)
             if not bubble_norm:
                 continue
+            lowered_bubble = bubble.lower()
             if bubble_norm == user_norm:
+                return True
+            if ("don't let me forget" in lowered_user or "dont let me forget" in lowered_user) and (
+                "won't let you forget" in lowered_bubble or "will remind you" in lowered_bubble
+            ):
+                return True
+            if lowered_user.startswith(("actually ", "wait ", "nah ", "make that ", "change it to ")) and "moved that to" in lowered_bubble:
                 return True
             leading_overlap = cls._leading_overlap_words(bubble_norm, user_norm)
             if len(user_words) >= 6 and leading_overlap >= 4:
@@ -833,18 +851,40 @@ class ConversationComposer:
         softened = text
         replacements = (
             (r"\boff the board\b", "handled"),
-            (r"\bon the board\b", "in the mix"),
-            (r"\bon deck\b", "in the mix"),
-            (r"\bgot (\d+) things from that(?: text)?\b", r"that's \1 things on your plate"),
-            (r"\bright now i'm tracking\b", "i've got"),
+            (r"\bon the board\b", "still there"),
+            (r"\bon deck\b", "right after that"),
+            (r"\bgot (\d+) things from that(?: text)?\b", r"okay, that's \1 different things"),
+            (r"\bright now i'm tracking\b", "i'm holding"),
             (r"\bnext up is\b", "if you can, hit"),
             (r"\bnext up\b", "after that"),
         )
         for pattern, replacement in replacements:
             softened = re.sub(pattern, replacement, softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\bbet,\s*got it[,.]?\s*", "bet ", softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\bi won't let you forget ([^.?!]+)", r"i'll hit you \1", softened, flags=re.IGNORECASE)
+        softened = re.sub(r"\bmoved that to ([^.?!]+)", r"okay \1", softened, flags=re.IGNORECASE)
         softened = re.sub(r"\bi deleted ([^.?!]+)", r"i took \1 out", softened, flags=re.IGNORECASE)
         softened = re.sub(r"\bi archived ([^.?!]+)", r"i took \1 out", softened, flags=re.IGNORECASE)
         return re.sub(r"\s{2,}", " ", softened).strip()
+
+    @staticmethod
+    def _looks_like_reminder_confirm(brief: ReplyBrief, first_fact: str | None) -> bool:
+        if brief.response_goal != "acknowledge_new_task" or brief.should_push_for_action or brief.suggested_next_step:
+            return False
+        if not first_fact:
+            return False
+        lowered = first_fact.lower()
+        return lowered.startswith(("i'll hit you ", "i'll keep that ", "i'll make sure that doesn't slip", "i got you"))
+
+    @staticmethod
+    def _looks_like_timing_shift_reply(brief: ReplyBrief, first_fact: str | None) -> bool:
+        if brief.response_goal != "confirm_update" or not first_fact:
+            return False
+        lowered_message = brief.latest_user_message.lower().strip()
+        if not lowered_message.startswith(("actually ", "wait ", "nah ", "make that ", "change it to ")):
+            return False
+        lowered_fact = first_fact.lower()
+        return lowered_fact.startswith(("okay ", "tomorrow", "monday", "tonight", "this ", "next "))
 
     @staticmethod
     def _clean_candidate_text(text: str) -> str:
@@ -959,6 +999,10 @@ class ConversationComposer:
                     "right now i'm tracking",
                     "start with",
                     "i'd start with",
+                    "i got you",
+                    "i'll hit you",
+                    "i'll keep that",
+                    "i'll make sure",
                 )
             ):
                 return True
@@ -976,14 +1020,42 @@ class ConversationComposer:
                 return True
             if not any(
                 marker in combined
-                for marker in ("tracking", "right now i'm tracking", "start with", "i'd start with", "got it", "bet", "locked in")
+                for marker in (
+                    "tracking",
+                    "right now i'm tracking",
+                    "start with",
+                    "i'd start with",
+                    "got it",
+                    "bet",
+                    "locked in",
+                    "i got you",
+                    "i'll hit you",
+                    "i'll keep that",
+                    "i'll make sure",
+                )
             ):
                 return True
 
         if brief.response_goal == "confirm_update":
             if not any(
                 marker in combined
-                for marker in ("updated", "cleared", "noted", "applied", "done", "marked", "bet", "dropped", "took", "we're good", "is out", "clears it")
+                for marker in (
+                    "updated",
+                    "cleared",
+                    "noted",
+                    "applied",
+                    "done",
+                    "marked",
+                    "bet",
+                    "dropped",
+                    "took",
+                    "we're good",
+                    "is out",
+                    "clears it",
+                    "okay tomorrow",
+                    "okay monday",
+                    "okay tonight",
+                )
             ):
                 return True
             if "under control" in combined:

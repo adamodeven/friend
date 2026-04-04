@@ -103,8 +103,8 @@ class StateEngine:
                 task = bundle.root_tasks[0]
                 outcome.key_facts_to_include.append(self._new_task_fact(task, user.timezone))
             else:
-                outcome.key_facts_to_include.append(f"that's {len(bundle.root_tasks)} things on your plate")
-                outcome.key_facts_to_include.append("i've got " + ", ".join(task.title for task in bundle.root_tasks[:3]) + " in the mix")
+                outcome.key_facts_to_include.append(f"okay, that's {len(bundle.root_tasks)} different things")
+                outcome.key_facts_to_include.append("i'm holding " + ", ".join(task.title for task in bundle.root_tasks[:3]))
             if bundle.subtask_count:
                 outcome.key_facts_to_include.append(f"i broke one of those into {bundle.subtask_count} smaller step{'s' if bundle.subtask_count != 1 else ''}")
             if bundle.dependency_count:
@@ -214,11 +214,11 @@ class StateEngine:
                 session.flush()
                 outcome.key_facts_to_include.append(f"{matched.title} is handled")
                 if unlocked:
-                    outcome.key_facts_to_include.append(f"that clears {unlocked[0].title}")
+                    outcome.key_facts_to_include.append(f"that frees up {unlocked[0].title}")
                     outcome.mention_dependency = True
                 next_task = self.timeline.recommend_next_task(session, user.id, user.timezone)
                 if next_task:
-                    outcome.key_facts_to_include.append(f"the main thing left is {next_task.title}")
+                    outcome.key_facts_to_include.append(f"after that, {next_task.title} is the one to hit")
                     outcome.suggested_next_step = self._next_step_for_task(next_task)
                     outcome.should_push_for_action = True
                     outcome.should_ask_question = False
@@ -263,7 +263,7 @@ class StateEngine:
             outcome.response_goal = "acknowledge_context"
             outcome.emotional_tone = "calm"
             outcome.key_facts_to_include.append(self._context_ack_text(block.block_type))
-            outcome.key_facts_to_include.append("i'm backing off for now")
+            outcome.key_facts_to_include.append("i'll back off for now")
             outcome.avoid_topics.append("hard-pressure push while unavailable")
 
         elif intent.intent == "reflection":
@@ -324,9 +324,9 @@ class StateEngine:
                     if action == "archive":
                         archived_count = self._archive_task_and_skip_pending_reminders(session, matched)
                         session.flush()
-                        outcome.key_facts_to_include.append(f"we're good on {matched.title}")
+                        outcome.key_facts_to_include.append(f"we're off {matched.title}")
                         if archived_count > 1:
-                            outcome.key_facts_to_include.append(f"that also clears {archived_count - 1} linked subtasks")
+                            outcome.key_facts_to_include.append(f"that takes {archived_count - 1} linked subtasks with it")
                         applied_change = True
                     if intent.time_reference:
                         parsed_deadline = interpret_time_reference(intent.time_reference, timezone=user.timezone)
@@ -349,7 +349,7 @@ class StateEngine:
                             if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN} and not is_window_phrase:
                                 matched.start_after = None
                             time_phrase = self._reschedule_phrase(parsed_deadline, intent.time_reference, user.timezone)
-                            outcome.key_facts_to_include.append(f"moved that to {time_phrase}")
+                            outcome.key_facts_to_include.append(self._reschedule_ack_text(time_phrase))
                             outcome.mention_deadline = True
                             applied_change = True
                     if intent.task_updates.get("status") == "blocked" or intent.blockers:
@@ -363,12 +363,12 @@ class StateEngine:
                             bundle=None,
                         )
                         self._refresh_task_block_state(matched)
-                        outcome.key_facts_to_include.append(f"task blocked: {matched.title}")
+                        outcome.key_facts_to_include.append(f"{matched.title} is blocked for now")
                         outcome.mention_dependency = True
                         outcome.response_goal = "replan_blocker"
                         applied_change = True
                         if resolved:
-                            outcome.key_facts_to_include.append(f"blocked by {resolved[0].title}")
+                            outcome.key_facts_to_include.append(f"real blocker is {resolved[0].title}")
                             outcome.suggested_next_step = self._next_step_for_task(resolved[0])
                             outcome.should_ask_question = False
                         else:
@@ -1204,6 +1204,18 @@ class StateEngine:
             return parsed_deadline.soft_deadline_at.astimezone(ZoneInfo(timezone_name)).strftime("%a %-m/%-d %-I:%M%p").lower()
         return source_phrase.strip()
 
+    @staticmethod
+    def _reschedule_ack_text(time_phrase: str) -> str:
+        phrase = humanize_window_phrase(time_phrase).strip().lower()
+        if not phrase:
+            return "okay, changed it"
+        if phrase.startswith(("today", "tomorrow", "tmr", "tonight", "this ", "next ")):
+            return f"okay {phrase}"
+        weekday_prefixes = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+        if phrase.startswith(weekday_prefixes):
+            return f"okay {phrase}"
+        return f"okay, {phrase}"
+
     def _refresh_task_block_state(self, task: Task) -> bool:
         unresolved = [link.predecessor_task for link in task.successor_links if link.predecessor_task.status != TaskStatus.completed]
         if unresolved:
@@ -1440,16 +1452,28 @@ class StateEngine:
         action_kind = self._task_action_kind(task)
         lowered_title = task.title[0].lower() + task.title[1:] if task.title else "it"
         time_phrase = humanize_window_phrase(task.deadline_source_phrase)
-        quick_subject = self._quick_task_subject(task.title)
         if self._looks_like_placeholder_assignment([task]):
-            return f"there's a {lowered_title} in the mix"
+            return f"looks like a {lowered_title} just landed"
         if action_kind == ACTION_KIND_QUICK_MESSAGE and time_phrase:
-            return f"i won't let you forget {time_phrase}"
+            return self._quick_reminder_fact(time_phrase, is_admin=False)
         if action_kind == ACTION_KIND_QUICK_ADMIN and time_phrase:
-            return f"i've got you for {time_phrase}"
+            return self._quick_reminder_fact(time_phrase, is_admin=True)
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
-            return "got you"
+            return "i got you"
         return f"got {task.title}"
+
+    @staticmethod
+    def _quick_reminder_fact(time_phrase: str, *, is_admin: bool) -> str:
+        phrase = humanize_window_phrase(time_phrase).strip().lower()
+        if not phrase:
+            return "i got you"
+        if is_admin:
+            if any(token in phrase for token in ("morning", "afternoon", "evening", "night", "tonight", "weekend", "later")):
+                return f"i'll keep that for {phrase}"
+            return f"i'll keep that on me for {phrase}"
+        if any(token in phrase for token in ("morning", "afternoon", "evening", "night", "tonight", "weekend", "later")):
+            return f"i'll hit you {phrase}"
+        return f"i'll make sure that doesn't slip {phrase}"
 
     @staticmethod
     def _timeline_custom_window(raw_text: str, timezone_name: str) -> tuple[str, datetime, datetime] | None:
@@ -1525,16 +1549,16 @@ class StateEngine:
     def _context_ack_text(block_type: str) -> str:
         normalized = block_type.replace("_", " ")
         if block_type == "in_class":
-            return "got it, you're in class rn"
+            return "okay, class first"
         if block_type == "driving":
-            return "got it, you're driving rn"
+            return "okay, drive first"
         if block_type == "social_event":
-            return "got it, you're tied up rn"
+            return "okay, go do your thing"
         if block_type == "all_nighter":
-            return "got it, you're on an all-nighter rn"
+            return "okay, we're on all-nighter timing"
         if block_type == "sleeping":
-            return "got it, you're off for the night"
-        return f"got it, you're tied up with {normalized} rn"
+            return "okay, you're done for tonight"
+        return f"okay, you're tied up with {normalized} rn"
 
     @staticmethod
     def _task_context(task: Task) -> ReplyTaskContext:

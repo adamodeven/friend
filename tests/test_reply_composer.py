@@ -594,7 +594,25 @@ def test_postprocess_softens_tracking_dump_phrase():
     lowered = " ".join(messages).lower()
     assert "got 4 things from that" not in lowered
     assert "right now i'm tracking" not in lowered
-    assert "4 things on your plate" in lowered
+    assert "4 different things" in lowered
+
+
+def test_postprocess_softens_reminder_and_reschedule_tracker_phrases():
+    brief = ReplyBrief(
+        response_goal="confirm_update",
+        latest_user_message="actually monday morning",
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
+        ["bet, got it. i won't let you forget tomorrow morning.", "moved that to monday morning"],
+        brief,
+    )
+    lowered = " ".join(messages).lower()
+    assert "bet, got it" not in lowered
+    assert "won't let you forget" not in lowered
+    assert "moved that to" not in lowered
+    assert "i'll hit you tomorrow morning" in lowered
+    assert "okay monday morning" in lowered
 
 
 def test_postprocess_softens_next_up_without_colon_and_deleted_language():
@@ -629,3 +647,35 @@ def test_react_to_progress_fallback_hands_off_like_a_person():
     assert "next up:" not in lowered
     assert "website fix is done" in lowered
     assert "that'd be huge" in lowered or "if you could also" in lowered
+
+
+def test_acknowledge_new_task_fallback_keeps_reminder_confirm_short():
+    adapter = FakeAdapter([], enabled=False)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="acknowledge_new_task",
+            latest_user_message="yo dont let me forget to email the scout recruiter tmr morning",
+            key_facts_to_include=["i'll hit you tomorrow morning"],
+            generated_at=datetime.now(),
+        )
+    )
+    lowered = " ".join(reply.messages).lower()
+    assert "bet, got it" not in lowered
+    assert "scout recruiter" not in lowered
+    assert "i'll hit you tomorrow morning" in lowered
+
+
+def test_confirm_update_fallback_keeps_timing_shift_natural():
+    adapter = FakeAdapter([], enabled=False)
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="confirm_update",
+            latest_user_message="actually monday morning",
+            key_facts_to_include=["okay monday morning"],
+            generated_at=datetime.now(),
+        )
+    )
+    lowered = " ".join(reply.messages).lower()
+    assert lowered == "okay monday morning"

@@ -293,7 +293,7 @@ def test_behavior_matrix_followup_reschedule_updates_same_reminder_task(db_sessi
     tasks = db_session.execute(select(Task).where(Task.user_id == user.id)).scalars().all()
     assert len(tasks) == 1
     assert tasks[0].deadline_source_phrase == "monday morning"
-    assert outcome.key_facts_to_include == ["moved that to monday morning"]
+    assert outcome.key_facts_to_include == ["okay monday morning"]
 
 
 def test_behavior_matrix_tmr_morning_query_uses_actual_timeline_window(db_session):

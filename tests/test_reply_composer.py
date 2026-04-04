@@ -581,6 +581,22 @@ def test_postprocess_softens_tracker_phrases():
     assert "on deck" not in lowered
 
 
+def test_postprocess_softens_tracking_dump_phrase():
+    brief = ReplyBrief(
+        response_goal="acknowledge_new_task",
+        latest_user_message="i've got cad, rent, website, and email on deck",
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
+        ["got 4 things from that text. right now i'm tracking cad, rent, website, and email."],
+        brief,
+    )
+    lowered = " ".join(messages).lower()
+    assert "got 4 things from that" not in lowered
+    assert "right now i'm tracking" not in lowered
+    assert "4 things on your plate" in lowered
+
+
 def test_react_to_progress_fallback_hands_off_like_a_person():
     adapter = FakeAdapter([], enabled=False)
     composer = ConversationComposer(adapter=adapter)

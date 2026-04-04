@@ -67,8 +67,8 @@ def test_add_task_persists_multiple_tasks_subtasks_and_dependencies(db_session):
     assert email_task.status == TaskStatus.blocked
     assert {dependency.predecessor_task_id for dependency in dependencies} == {subtask.id, prerequisite.id}
     assert outcome.is_multi_task_turn is True
-    assert any("got 2 things" in fact for fact in outcome.key_facts_to_include)
-    assert any("split out 1 smaller steps" in fact for fact in outcome.key_facts_to_include)
+    assert any("2 things on your plate" in fact for fact in outcome.key_facts_to_include)
+    assert any("broke one of those into 1 smaller step" in fact for fact in outcome.key_facts_to_include)
     assert any("dependency" in fact for fact in outcome.key_facts_to_include)
 
 
@@ -209,6 +209,7 @@ def test_quick_message_windowed_task_does_not_push_fake_prep_step(db_session):
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_push_for_action is False
     assert outcome.suggested_next_step is None
+    assert any("texting roommate back is set for tomorrow morning" in fact.lower() for fact in outcome.key_facts_to_include)
 
 
 def test_default_next_step_does_not_repeat_submit_for_submit_titles():
@@ -479,7 +480,7 @@ def test_multi_task_add_with_limited_timing_asks_one_prioritization_question(db_
 
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_ask_question is True
-    assert outcome.question_if_needed == "which one of those blows up the hardest if it slips?"
+    assert outcome.question_if_needed == "which one of those actually has the least wiggle room?"
 
 
 def test_reflection_records_slip_reason_on_task_and_memory(db_session):

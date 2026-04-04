@@ -209,6 +209,8 @@ class ConversationComposer:
             "Most replies should be one short bubble. Use a second or third only when it clearly helps. "
             "For casual, off-topic, or meta texts, answer socially first and do not force a task pivot. "
             "When the user is vague, overwhelmed, or slipping, narrow it to one concrete next move. "
+            "If something is really just a small reminder-type action, treat it like that and do not turn it into a mini project or fake work block. "
+            "If a vague new obligation shows up, ask one short follow-up when that would materially sharpen the plan. "
             "Urgency should sound calm and real, never corny, fake inspirational, or hypey. "
             "Avoid stiff database-y verbs like archived, captured, or logged unless the user used that language first. "
             "Prefer natural phrasing like bet, got it, good looks, we're good there, or that clears it when it fits. "
@@ -245,6 +247,8 @@ class ConversationComposer:
             "Default to one short bubble unless extra separation clearly improves clarity. "
             "For casual, off-topic, or meta texts, answer socially first and do not force a task pivot. "
             "If the user is vague or overloaded, reduce cognitive load by choosing one next move. "
+            "Reminder-like actions should not be treated like mini projects or given fake first-pass work. "
+            "Use a short follow-up question when a vague new obligation needs one detail to plan well. "
             "Urgency should feel clean and real, never corny or fake inspirational. "
             "Do not sound like a database or task tracker. "
             "Answer the latest user message directly and keep context continuity. "
@@ -340,6 +344,7 @@ class ConversationComposer:
             "- for casual or off-topic texts, stay social first and do not force action\n"
             "- if you push for action, narrow to one next move\n"
             "- if you ask a follow-up, keep it brief and only ask one\n"
+            "- if a task is really a reminder-type action, do not treat it like a project or suggest a fake work block\n"
             "- if this is an answer_question goal, first bubble must be a direct answer statement\n"
             "- keep it human and text-like\n"
             "- no semicolons in the user-facing reply\n"
@@ -830,6 +835,8 @@ class ConversationComposer:
             (r"\boff the board\b", "handled"),
             (r"\bon the board\b", "in the mix"),
             (r"\bon deck\b", "in the mix"),
+            (r"\bgot (\d+) things from that(?: text)?\b", r"that's \1 things on your plate"),
+            (r"\bright now i'm tracking\b", "i've got"),
         )
         for pattern, replacement in replacements:
             softened = re.sub(pattern, replacement, softened, flags=re.IGNORECASE)

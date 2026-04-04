@@ -26,6 +26,7 @@ from app.domain.task_semantics import (
     ACTION_KIND_QUICK_MESSAGE,
     default_next_step,
     infer_action_kind,
+    humanize_window_phrase,
     is_soft_later_phrase,
 )
 from app.domain.timeline_service import TimelineService
@@ -97,14 +98,14 @@ class StateEngine:
 
             if len(bundle.root_tasks) == 1:
                 task = bundle.root_tasks[0]
-                outcome.key_facts_to_include.append(f"got {task.title}")
+                outcome.key_facts_to_include.append(self._new_task_fact(task, user.timezone))
             else:
-                outcome.key_facts_to_include.append(f"got {len(bundle.root_tasks)} things from that text")
-                outcome.key_facts_to_include.append("right now i'm tracking " + ", ".join(task.title for task in bundle.root_tasks[:3]))
+                outcome.key_facts_to_include.append(f"that's {len(bundle.root_tasks)} things on your plate")
+                outcome.key_facts_to_include.append("i've got " + ", ".join(task.title for task in bundle.root_tasks[:3]) + " in the mix")
             if bundle.subtask_count:
-                outcome.key_facts_to_include.append(f"split out {bundle.subtask_count} smaller steps")
+                outcome.key_facts_to_include.append(f"i broke one of those into {bundle.subtask_count} smaller step{'s' if bundle.subtask_count != 1 else ''}")
             if bundle.dependency_count:
-                outcome.key_facts_to_include.append(f"linked {bundle.dependency_count} dependency threads")
+                outcome.key_facts_to_include.append("there's a dependency in there too")
             if bundle.created_prerequisites:
                 outcome.key_facts_to_include.append(f"real blocker looks like {bundle.created_prerequisites[0].title}")
             actionable_deadline_tasks = [
@@ -143,7 +144,12 @@ class StateEngine:
                     outcome.key_facts_to_include.append(f"i'll circle back around {scheduled}")
 
             preferred_new_focus = self._preferred_focus_from_new_tasks(bundle.root_tasks, user.timezone)
-            if preferred_new_focus:
+            if preferred_new_focus and self._should_push_new_task_focus(
+                preferred_new_focus,
+                task_count=len(bundle.root_tasks),
+                timezone_name=user.timezone,
+                raw_text=raw_text,
+            ):
                 outcome.suggested_next_step = self._next_step_for_task(preferred_new_focus)
                 outcome.should_push_for_action = True
 
@@ -173,7 +179,7 @@ class StateEngine:
                 outcome.question_if_needed = "want me to break that into 2 quick checkpoints?"
             elif len(bundle.root_tasks) >= 3 and self._should_ask_load_prioritization_question(bundle.root_tasks):
                 outcome.should_ask_question = True
-                outcome.question_if_needed = "which one of those blows up the hardest if it slips?"
+                outcome.question_if_needed = "which one of those actually has the least wiggle room?"
                 outcome.should_push_for_action = False
                 outcome.suggested_next_step = None
             else:
@@ -183,6 +189,15 @@ class StateEngine:
             if needs_post_context_followup and not outcome.should_ask_question:
                 outcome.should_ask_question = True
                 outcome.question_if_needed = "when you're out, send me the assignment details and i'll slot it cleanly"
+            elif (
+                len(bundle.root_tasks) == 1
+                and self._looks_like_placeholder_assignment(bundle.root_tasks)
+                and not outcome.should_ask_question
+            ):
+                outcome.should_ask_question = True
+                outcome.question_if_needed = "send me the assignment details when you have them and i'll slot it cleanly"
+                outcome.should_push_for_action = False
+                outcome.suggested_next_step = None
 
         elif intent.intent == "complete_task":
             matched = self._match_task_from_text(session, user.id, raw_text)
@@ -193,13 +208,13 @@ class StateEngine:
                 mark_task_complete(matched)
                 unlocked = self._refresh_successors(matched)
                 session.flush()
-                outcome.key_facts_to_include.append(f"{matched.title} is done")
+                outcome.key_facts_to_include.append(f"{matched.title} is handled")
                 if unlocked:
                     outcome.key_facts_to_include.append(f"that clears {unlocked[0].title}")
                     outcome.mention_dependency = True
                 next_task = self.timeline.recommend_next_task(session, user.id, user.timezone)
                 if next_task:
-                    outcome.key_facts_to_include.append(f"after that, {next_task.title} is the big thing left")
+                    outcome.key_facts_to_include.append(f"the main thing left is {next_task.title}")
                     outcome.suggested_next_step = self._next_step_for_task(next_task)
                     outcome.should_push_for_action = True
                     outcome.should_ask_question = False
@@ -926,7 +941,12 @@ class StateEngine:
         if len(tasks) < 3:
             return False
         timed = sum(1 for task in tasks if task.deadline_at is not None or task.start_after is not None)
-        return timed <= 1
+        quick_actions = sum(
+            1
+            for task in tasks
+            if StateEngine._task_action_kind(task) in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}
+        )
+        return timed <= 1 or (len(tasks) >= 4 and timed <= 2) or (len(tasks) >= 4 and quick_actions >= 2)
 
     @staticmethod
     def _time_clarification_question(*, task_title: str, time_reference: str) -> str:
@@ -1124,6 +1144,77 @@ class StateEngine:
             return None
         return focus
 
+    def _should_push_new_task_focus(
+        self,
+        task: Task,
+        *,
+        task_count: int,
+        timezone_name: str,
+        raw_text: str,
+    ) -> bool:
+        kind = self._task_action_kind(task)
+        now = datetime.now(tz=ZoneInfo(timezone_name))
+        start_after = self._normalize_dt(task.start_after, timezone_name)
+        deadline_at = self._normalize_dt(task.deadline_at, timezone_name)
+        lowered = raw_text.lower()
+
+        if task.status == TaskStatus.blocked or is_soft_later_phrase(task.deadline_source_phrase):
+            return False
+        if start_after is not None and start_after > now:
+            return False
+
+        if kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+            if task_count > 1:
+                return False
+            if any(token in lowered for token in ("right now", "rn", "asap", "before i forget", "real quick")):
+                return True
+            if deadline_at is not None and deadline_at - now <= timedelta(minutes=90):
+                return True
+            return False
+
+        return True
+
+    def _new_task_fact(self, task: Task, timezone_name: str) -> str:
+        action_kind = self._task_action_kind(task)
+        lowered_title = task.title[0].lower() + task.title[1:] if task.title else "it"
+        time_phrase = humanize_window_phrase(task.deadline_source_phrase)
+        quick_subject = self._quick_task_subject(task.title)
+        if self._looks_like_placeholder_assignment([task]):
+            return f"there's a {lowered_title} in the mix"
+        if action_kind == ACTION_KIND_QUICK_MESSAGE and time_phrase:
+            return f"{quick_subject} is set for {time_phrase}"
+        if action_kind == ACTION_KIND_QUICK_ADMIN and time_phrase:
+            return f"{quick_subject} is set for {time_phrase}"
+        if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+            return f"got {quick_subject}"
+        return f"got {task.title}"
+
+    @staticmethod
+    def _quick_task_subject(title: str) -> str:
+        lowered = title.strip().lower()
+        replacements = (
+            ("pay ", ""),
+            ("book ", ""),
+            ("schedule ", ""),
+            ("renew ", ""),
+            ("cancel ", ""),
+            ("buy ", ""),
+        )
+        for prefix, replacement in replacements:
+            if lowered.startswith(prefix):
+                return replacement + lowered[len(prefix) :]
+        if lowered.startswith("text "):
+            return f"texting {lowered[5:]}"
+        if lowered.startswith("call "):
+            return f"calling {lowered[5:]}"
+        if lowered.startswith("reply "):
+            return f"replying to {lowered[6:]}"
+        if lowered.startswith("dm "):
+            return f"dming {lowered[3:]}"
+        if lowered.startswith("ping "):
+            return f"pinging {lowered[5:]}"
+        return lowered
+
     @staticmethod
     def _record_context_block(session: Session, *, user, raw_text: str, confidence: float) -> ScheduleBlock:
         starts, ends = time_window_for_context(raw_text, user.timezone)
@@ -1143,7 +1234,7 @@ class StateEngine:
         if len(tasks) != 1:
             return False
         lowered = tasks[0].title.lower()
-        return "new assignment" in lowered or "assignment from professor" in lowered
+        return lowered.startswith("new assignment")
 
     @staticmethod
     def _context_ack_text(block_type: str) -> str:

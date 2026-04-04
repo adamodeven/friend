@@ -187,7 +187,7 @@ class IntentExtractor:
             return IntentResult(intent=intent, confidence=confidence, summary="user asked assistant capabilities")
         elif looks_add_task:
             intent = "add_task"
-            tasks = candidate_tasks or self._extract_tasks_from_text(lowered, timezone)
+            tasks = [placeholder_assignment] if placeholder_assignment else (candidate_tasks or self._extract_tasks_from_text(lowered, timezone))
             if not tasks:
                 extracted_title = self._simple_task_title(lowered)
                 deadline_text = self._extract_deadline_phrase(lowered)
@@ -290,11 +290,11 @@ class IntentExtractor:
             fallback.intent == "add_task"
             and fallback.context_signal is not None
             and fallback.task is not None
-            and fallback.task.title.lower() in {"new assignment", "new assignment from professor"}
+            and IntentExtractor._is_placeholder_assignment_title(fallback.task.title)
             and llm_result.intent == "add_task"
             and llm_result.task is not None
             and "assignment" in llm_result.task.title.lower()
-            and "class" in llm_result.task.title.lower()
+            and not IntentExtractor._is_placeholder_assignment_title(llm_result.task.title)
         ):
             return True
         if llm_result.intent == "general_chat" and fallback.intent in {"add_task", "timeline_query", "context_signal"} and fallback.confidence >= 0.78:
@@ -653,13 +653,23 @@ class IntentExtractor:
     def _looks_like_task_segment(self, text: str) -> bool:
         if "?" in text:
             return False
-        if re.search(rf"^(?:yo|hey|ok|okay|alright|and\s+then|then\s+)?{self._TASK_START_PATTERN}\b", text):
+        candidate = self._strip_leading_time_prefix(text)
+        if re.search(rf"^(?:yo|hey|ok|okay|alright|and\s+then|then\s+)?{self._TASK_START_PATTERN}\b", candidate):
             return True
-        if re.search(r"\b(?:got|have|new|another|dropped)\s+(?:an?\s+)?assignment\b", text):
+        if re.search(r"\b(?:got|have|new|another|dropped|posted|assigned)\s+(?:an?\s+)?assignment\b", text):
             return True
         deadline_text = self._extract_deadline_phrase(text)
         return deadline_text is not None and bool(
-            re.search(r"\b(submit|finish|send|prepare|fix|study|write|review|apply|upload|pay|draft|reply|complete|export|print)\b", text),
+            re.search(r"\b(submit|finish|send|prepare|fix|study|write|review|apply|upload|pay|draft|reply|complete|export|print|text|call)\b", candidate),
+        )
+
+    @staticmethod
+    def _strip_leading_time_prefix(text: str) -> str:
+        return re.sub(
+            r"^(?:tmr morning|tomorrow morning|tomorrow night|tonight|this weekend|later|after class|before studio)\s+",
+            "",
+            text.strip(),
+            flags=re.IGNORECASE,
         )
 
     @staticmethod
@@ -725,7 +735,7 @@ class IntentExtractor:
             fallback.intent == "add_task"
             and fallback.context_signal is not None
             and fallback.task is not None
-            and fallback.task.title.lower() in {"new assignment", "new assignment from professor"}
+            and self._is_placeholder_assignment_title(fallback.task.title)
         ):
             return True
         if fallback.intent == "general_chat" and fallback.confidence >= 0.55 and self._is_simple_checkin(lowered):
@@ -812,19 +822,33 @@ class IntentExtractor:
 
     @staticmethod
     def _placeholder_assignment_task(text: str, timezone: str) -> ExtractedTask | None:  # noqa: ARG004
-        if re.search(r"\b(prof|professor)\b.*\b(dropped|posted|assigned)\b.*\bassignment\b", text):
+        if "assignment" not in text:
+            return None
+        source = None
+        if re.search(r"\b(prof|professor)\b", text):
+            source = "professor"
+        elif re.search(r"\bstudio\b", text):
+            source = "studio"
+        elif re.search(r"\bclass\b", text):
+            source = "class"
+        if re.search(r"\b(prof|professor)\b.*\b(dropped|posted|assigned)\b.*\bassignment\b", text) or re.search(
+            r"\b(just got|got|have|new|another|dropped|posted|assigned)\b.*\bassignment\b",
+            text,
+        ):
+            title = "New assignment"
+            if source:
+                title = f"New assignment from {source}"
             return ExtractedTask(
-                title="New assignment from professor",
-                confidence=0.56,
-                next_step="send me the assignment details once you're free",
-            )
-        if re.search(r"\b(new|another)\s+assignment\b", text):
-            return ExtractedTask(
-                title="New assignment",
-                confidence=0.5,
+                title=title,
+                confidence=0.56 if source else 0.5,
                 next_step="send me the assignment details once you're free",
             )
         return None
+
+    @staticmethod
+    def _is_placeholder_assignment_title(title: str | None) -> bool:
+        lowered = (title or "").strip().lower()
+        return lowered.startswith("new assignment")
 
 
 class ImageAssignmentExtractor:

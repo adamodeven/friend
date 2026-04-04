@@ -87,6 +87,30 @@ def test_state_matrix_handles_quick_message_as_reminder_not_project(db_session):
     assert outcome.suggested_next_step is None
 
 
+def test_state_matrix_handles_quick_admin_as_reminder_not_immediate_work_block(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    evening = datetime.now(tz=ZoneInfo(user.timezone)) + timedelta(hours=4)
+    engine = StateEngine()
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="add_task",
+            confidence=0.92,
+            task=ExtractedTask(
+                title="Pay rent",
+                deadline_text="tonight",
+                deadline_at=evening,
+                action_kind="quick_admin",
+            ),
+        ),
+        raw_text="need to pay rent tonight",
+    )
+    assert outcome.should_push_for_action is False
+    assert outcome.suggested_next_step is None
+
+
 def test_state_matrix_asks_for_prioritization_when_load_is_wide_and_loose(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None
@@ -107,7 +131,61 @@ def test_state_matrix_asks_for_prioritization_when_load_is_wide_and_loose(db_ses
         raw_text="tonight i need to clean up portfolio bullets, pay rent, fix the website, and reply to that club email",
     )
     assert outcome.should_ask_question is True
-    assert outcome.question_if_needed == "which one of those blows up the hardest if it slips?"
+    assert outcome.question_if_needed == "which one of those actually has the least wiggle room?"
+
+
+def test_state_matrix_placeholder_assignment_without_details_prompts_for_followup(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="add_task",
+            confidence=0.82,
+            task=ExtractedTask(title="New assignment from studio"),
+        ),
+        raw_text="just got another assignment from studio",
+    )
+    assert outcome.should_ask_question is True
+    assert "assignment details" in (outcome.question_if_needed or "")
+
+
+def test_state_matrix_prefers_real_work_over_future_quick_message_in_same_turn(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    tomorrow_morning = (datetime.now(tz=ZoneInfo(user.timezone)) + timedelta(days=1)).replace(
+        hour=8,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    engine = StateEngine()
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="add_task",
+            confidence=0.92,
+            tasks=[
+                ExtractedTask(
+                    title="Finish enclosure CAD",
+                    deadline_text="tomorrow night",
+                    action_kind="project_chunk",
+                ),
+                ExtractedTask(
+                    title="Text roommate back",
+                    deadline_text="tomorrow morning",
+                    start_after=tomorrow_morning,
+                    action_kind="quick_message",
+                ),
+            ],
+        ),
+        raw_text="finish the enclosure cad by tomorrow night and text my roommate back tomorrow morning",
+    )
+    assert outcome.should_push_for_action is True
+    assert "enclosure cad" in (outcome.suggested_next_step or "").lower()
 
 
 def test_timeline_matrix_prefers_real_work_over_future_quick_message(db_session):

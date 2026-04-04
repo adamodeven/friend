@@ -269,6 +269,15 @@ def test_text_roommate_tomorrow_morning_is_quick_message_not_fake_project():
     assert result.task.next_step is None
 
 
+def test_leading_time_phrase_before_quick_message_still_extracts_task():
+    extractor = IntentExtractor()
+    result = extractor.extract("tomorrow morning text my roommate back", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert result.task.action_kind == "quick_message"
+    assert "roommate" in result.task.title.lower()
+
+
 def test_pay_rent_tonight_is_quick_admin_not_work_block():
     extractor = IntentExtractor()
     result = extractor.extract("need to pay rent tonight", "America/New_York")
@@ -284,6 +293,14 @@ def test_mixed_assignment_and_context_creates_placeholder_task_and_context_signa
     assert result.context_signal is not None
     assert result.task is not None
     assert result.task.title == "New assignment from professor"
+
+
+def test_generic_new_assignment_from_studio_uses_placeholder_task():
+    extractor = IntentExtractor()
+    result = extractor.extract("just got another assignment from studio", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert result.task.title == "New assignment from studio"
 
 
 def test_mixed_assignment_context_fallback_wins_over_literal_llm_task_title():

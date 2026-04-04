@@ -684,6 +684,24 @@ def test_acknowledge_new_task_reminder_shortcuts_past_llm_freestyling():
     assert reply.messages == ["okay bet, i'll remind you"]
 
 
+def test_acknowledge_new_task_with_followup_question_splits_cleanly():
+    composer = ConversationComposer(adapter=FakeAdapter([], enabled=False))
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="acknowledge_new_task",
+            latest_user_message="i need to finish the enclosure cad by tomorrow night and pay rent tonight and text my roommate tomorrow morning",
+            key_facts_to_include=["okay that's a real stack"],
+            should_ask_question=True,
+            question_if_needed="which one gets annoying first if it slips?",
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.messages == [
+        "okay that's a real stack",
+        "which one gets annoying first if it slips?",
+    ]
+
+
 def test_confirm_update_fallback_keeps_timing_shift_natural():
     adapter = FakeAdapter([], enabled=False)
     composer = ConversationComposer(adapter=adapter)
@@ -728,6 +746,21 @@ def test_postprocess_drops_redundant_ack_after_timing_shift():
         brief,
     )
     assert messages == ["okay bet, i moved it"]
+
+
+def test_progress_followup_question_stays_short_and_human():
+    composer = ConversationComposer(adapter=FakeAdapter([], enabled=False))
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="react_to_progress",
+            latest_user_message="bet website fix is done",
+            key_facts_to_include=["bet"],
+            should_ask_question=True,
+            question_if_needed="which one was that?",
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.messages == ["bet", "which one was that?"]
 
 
 def test_postprocess_repairs_timeline_reply_that_repeats_user_question():

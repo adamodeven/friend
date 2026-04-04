@@ -166,7 +166,7 @@ class StateEngine:
                 outcome.key_facts_to_include.append(context_label)
                 outcome.should_push_for_action = False
                 outcome.suggested_next_step = None
-            needs_post_context_followup = intent.context_signal and self._looks_like_placeholder_assignment(bundle.root_tasks)
+            needs_post_context_followup = intent.context_signal and self._placeholder_assignment_needs_details(bundle.root_tasks)
 
             if bundle.ambiguous_deadline_task and bundle.ambiguous_time_reference:
                 outcome.should_ask_question = True
@@ -186,7 +186,7 @@ class StateEngine:
                 outcome.question_if_needed = "want me to break that into 2 quick checkpoints?"
             elif len(bundle.root_tasks) >= 3 and self._should_ask_load_prioritization_question(bundle.root_tasks):
                 outcome.should_ask_question = True
-                outcome.question_if_needed = "which one turns into a problem first if it slips?"
+                outcome.question_if_needed = "which one gets annoying first if it slips?"
                 outcome.should_push_for_action = False
                 outcome.suggested_next_step = None
             else:
@@ -198,7 +198,7 @@ class StateEngine:
                 outcome.question_if_needed = "when you're out, send me the assignment details and i'll slot it cleanly"
             elif (
                 len(bundle.root_tasks) == 1
-                and self._looks_like_placeholder_assignment(bundle.root_tasks)
+                and self._placeholder_assignment_needs_details(bundle.root_tasks)
                 and not outcome.should_ask_question
             ):
                 outcome.should_ask_question = True
@@ -228,7 +228,7 @@ class StateEngine:
             else:
                 outcome.key_facts_to_include.append("bet")
                 outcome.should_ask_question = True
-                outcome.question_if_needed = "which one was that exactly?"
+                outcome.question_if_needed = "which one was that?"
 
         elif intent.intent == "timeline_query":
             outcome.response_goal = "timeline_summary"
@@ -1638,6 +1638,20 @@ class StateEngine:
             return False
         lowered = tasks[0].title.lower()
         return lowered.startswith("new assignment")
+
+    @classmethod
+    def _placeholder_assignment_needs_details(cls, tasks: list[Task]) -> bool:
+        if not cls._looks_like_placeholder_assignment(tasks):
+            return False
+        task = tasks[0]
+        return not any(
+            (
+                task.deadline_source_phrase,
+                task.deadline_at,
+                task.soft_deadline_at,
+                task.description,
+            )
+        )
 
     @staticmethod
     def _context_ack_text(block_type: str) -> str:

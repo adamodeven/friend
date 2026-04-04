@@ -98,6 +98,24 @@ class ConversationComposer:
                 soft_chunk_length=style_profile.soft_chunk_chars,
             )
 
+        if (
+            brief.response_goal == "acknowledge_new_task"
+            and first_fact
+            and brief.should_ask_question
+            and brief.question_if_needed
+            and not brief.should_push_for_action
+        ):
+            return [first_fact, brief.question_if_needed][: min(brief.max_chunks, 2)]
+
+        if (
+            brief.response_goal == "react_to_progress"
+            and first_fact
+            and brief.should_ask_question
+            and brief.question_if_needed
+            and not brief.should_push_for_action
+        ):
+            return [first_fact, brief.question_if_needed][: min(brief.max_chunks, 2)]
+
         return None
 
     def _compose_with_llm(self, brief: ReplyBrief, recent_assistant: list[str]) -> tuple[list[str] | None, bool]:
@@ -457,14 +475,16 @@ class ConversationComposer:
                 if brief.should_ask_question and brief.question_if_needed:
                     base = f"{base} {brief.question_if_needed}"
             elif brief.should_ask_question and brief.question_if_needed:
-                base = f"bet, got it. {first_fact} {brief.question_if_needed}"
+                base = f"{first_fact} {brief.question_if_needed}"
             elif brief.suggested_next_step:
                 base = f"bet, got it. {first_fact} if you touch it next, i'd start with {brief.suggested_next_step}"
             else:
                 base = f"bet, got it. {first_fact}"
         elif brief.response_goal == "react_to_progress":
             fact = first_fact or "good looks, that clears it."
-            if brief.suggested_next_step:
+            if brief.should_ask_question and brief.question_if_needed:
+                base = f"{fact} {brief.question_if_needed}"
+            elif brief.suggested_next_step:
                 base = f"{fact} if you could also {brief.suggested_next_step} next, that'd be huge."
             else:
                 base = fact

@@ -663,7 +663,7 @@ def test_complete_task_with_uncertain_match_asks_softer_followup(db_session):
     assert outcome.response_goal == "react_to_progress"
     assert outcome.key_facts_to_include == ["bet"]
     assert outcome.should_ask_question is True
-    assert outcome.question_if_needed == "which one was that exactly?"
+    assert outcome.question_if_needed == "which one was that?"
 
 
 def test_multi_task_add_with_limited_timing_asks_one_prioritization_question(db_session):
@@ -689,7 +689,39 @@ def test_multi_task_add_with_limited_timing_asks_one_prioritization_question(db_
 
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_ask_question is True
-    assert outcome.question_if_needed == "which one turns into a problem first if it slips?"
+    assert outcome.question_if_needed == "which one gets annoying first if it slips?"
+
+
+def test_assignment_detail_followup_with_due_date_does_not_keep_asking_for_details(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+
+    first_outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="add_task",
+            confidence=0.84,
+            context_signal="prof just dropped another assignment and im in class rn",
+            task=ExtractedTask(title="New assignment from studio"),
+        ),
+        raw_text="prof just dropped another assignment and im in class rn",
+    )
+    assert first_outcome.should_ask_question is True
+
+    second_outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="add_task",
+            confidence=0.88,
+            task=ExtractedTask(title="New assignment from studio", deadline_text="tuesday night"),
+        ),
+        raw_text="actually its for studio and due tuesday night",
+    )
+
+    assert second_outcome.should_ask_question is False
 
 
 def test_repeat_task_mention_reuses_existing_active_task(db_session):

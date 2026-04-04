@@ -718,6 +718,30 @@ def test_acknowledge_new_task_with_followup_question_splits_cleanly():
     ]
 
 
+def test_acknowledge_new_task_multi_task_with_question_keeps_sequence_and_question_separate():
+    composer = ConversationComposer(adapter=FakeAdapter([], enabled=False))
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="acknowledge_new_task",
+            latest_user_message="i need to finish the enclosure cad by tomorrow night and pay rent tonight and text my roommate tomorrow morning",
+            key_facts_to_include=[
+                "i'd start with the enclosure cad",
+                "then i'd roll into the portfolio bullets",
+            ],
+            is_multi_task_turn=True,
+            should_ask_question=True,
+            question_if_needed="what time is studio?",
+            max_chunks=3,
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.messages == [
+        "i'd start with the enclosure cad",
+        "then i'd roll into the portfolio bullets",
+        "what time is studio?",
+    ]
+
+
 def test_acknowledge_new_task_multi_task_shortcuts_preserve_conversational_sequence():
     composer = ConversationComposer(adapter=FakeAdapter([], enabled=False))
     reply = composer.compose(

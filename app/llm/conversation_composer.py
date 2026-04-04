@@ -137,6 +137,22 @@ class ConversationComposer:
 
         if (
             brief.response_goal == "acknowledge_new_task"
+            and brief.is_multi_task_turn
+            and brief.should_ask_question
+            and brief.question_if_needed
+            and not brief.should_push_for_action
+        ):
+            stack_messages = [
+                self._sanitize_fallback_text(fact)
+                for fact in brief.key_facts_to_include[:3]
+                if self._sanitize_fallback_text(fact)
+            ]
+            stack_messages = stack_messages[:2]
+            stack_messages.append(brief.question_if_needed)
+            return stack_messages[: min(brief.max_chunks, 3)]
+
+        if (
+            brief.response_goal == "acknowledge_new_task"
             and first_fact
             and brief.should_ask_question
             and brief.question_if_needed

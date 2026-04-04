@@ -615,6 +615,49 @@ def test_complete_task_adds_more_human_followup_for_next_work(db_session):
     assert outcome.response_goal == "react_to_progress"
     assert outcome.key_facts_to_include[0] == "bet"
     assert any("if you could also finish the enclosure cad next that'd be huge" == fact for fact in outcome.key_facts_to_include)
+
+
+def test_stack_sequence_falls_back_to_human_hold_fact_when_followup_is_future_windowed(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+    tomorrow_morning = (datetime.now(tz=ZoneInfo(user.timezone)) + timedelta(days=1)).replace(
+        hour=8,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    tomorrow_night = (datetime.now(tz=ZoneInfo(user.timezone)) + timedelta(days=1)).replace(
+        hour=21,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="add_task",
+            confidence=0.9,
+            tasks=[
+                ExtractedTask(title="Finish enclosure CAD", deadline_at=tomorrow_night, action_kind="project_chunk"),
+                ExtractedTask(
+                    title="Text roommate back",
+                    deadline_text="tomorrow morning",
+                    start_after=tomorrow_morning,
+                    action_kind="quick_message",
+                ),
+                ExtractedTask(
+                    title="Send scout followup",
+                    deadline_text="monday morning",
+                    start_after=tomorrow_morning + timedelta(days=2),
+                    action_kind="quick_message",
+                ),
+            ],
+        ),
+        raw_text="finish the enclosure cad by tomorrow night and text my roommate tomorrow morning and send scout followup monday morning",
+    )
+    assert any("the rest can sit on their times for now" == fact for fact in outcome.key_facts_to_include)
     assert outcome.should_ask_question is False
 
 

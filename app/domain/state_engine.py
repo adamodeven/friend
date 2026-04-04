@@ -1633,6 +1633,10 @@ class StateEngine:
             followup_fact = self._stack_followup_fact(followup, timezone_name)
             if followup_fact:
                 facts.append(followup_fact)
+        elif len(ordered) > 1:
+            hold_fact = self._stack_hold_fact(ordered, focus, timezone_name)
+            if hold_fact:
+                facts.append(hold_fact)
         if not facts:
             facts.append("okay that's a real stack")
         return facts
@@ -1674,6 +1678,24 @@ class StateEngine:
         if not lowered_title:
             return None
         return f"then i'd roll into {lowered_title}"
+
+    def _stack_hold_fact(self, ordered: list[Task], focus: Task, timezone_name: str) -> str | None:
+        waiting = [task for task in ordered if task.id != focus.id]
+        if not waiting:
+            return None
+        now = datetime.now(tz=ZoneInfo(timezone_name))
+        windowed = [
+            task
+            for task in waiting
+            if self._normalize_dt(task.start_after, timezone_name) is not None
+            and self._normalize_dt(task.start_after, timezone_name) > now
+        ]
+        if windowed:
+            return "the rest can sit on their times for now"
+        quick = [task for task in waiting if self._task_action_kind(task) in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}]
+        if quick:
+            return "the smaller stuff can wait till right after"
+        return None
 
     def _completion_followup_fact(self, task: Task) -> str | None:
         next_step = self._next_step_for_task(task).strip()

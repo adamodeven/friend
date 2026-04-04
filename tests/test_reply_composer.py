@@ -877,6 +877,32 @@ def test_timeline_summary_uses_more_human_plan_framing_for_tonight():
     assert "due sun" not in lowered
 
 
+def test_timeline_summary_uses_by_for_week_view_instead_of_due_labels():
+    brief = ReplyBrief(
+        response_goal="timeline_summary",
+        latest_user_message="what do i have due this week",
+        key_facts_to_include=["this week\n1. Finish the enclosure CAD - due sun 4/5\n2. New assignment from studio - due tue 4/7\n3. Send scout followup - for monday morning"],
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
+    lowered = " ".join(messages.messages).lower()
+    assert "this week i'd start with" in lowered
+    assert "by sun 4/5" in lowered
+    assert "by tue 4/7" in lowered
+    assert " due " not in lowered
+
+
+def test_timeline_summary_project_view_uses_for_label_not_heading_literal():
+    brief = ReplyBrief(
+        response_goal="timeline_summary",
+        latest_user_message="what's the plan for the enclosure project",
+        key_facts_to_include=["enclosure\n1. Finish the enclosure CAD - due sun 4/5"],
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
+    assert messages.messages == ["for enclosure, it's just finish the enclosure cad by sun 4/5."]
+
+
 def test_timeline_summary_empty_window_reads_more_naturally():
     messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
         ["what do i have on monday morning, monday morning looks open right now."],
@@ -903,6 +929,19 @@ def test_postprocess_softens_queued_language():
     lowered = " ".join(messages).lower()
     assert "queued" not in lowered
     assert "i've got it" in lowered
+
+
+def test_postprocess_softens_noted_and_down_language():
+    brief = ReplyBrief(
+        response_goal="acknowledge_new_task",
+        latest_user_message="actually its for studio and due tuesday night",
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
+        ["got it, that studio assignment’s due tuesday night", "i've got it down"],
+        brief,
+    )
+    assert messages == ["got it, that studio assignment’s due tuesday night", "i've got it"]
 
 
 def test_postprocess_replaces_raw_next_step_bubble_after_completion():

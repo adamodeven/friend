@@ -405,6 +405,55 @@ def test_day_only_followup_preserves_existing_part_of_day_window(db_session):
     assert task.start_after is not None
 
 
+def test_named_task_reschedule_updates_existing_deadline_from_embedded_phrase(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+    first_inbound = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="update my portfolio bullets by wednesday",
+        external_id="SM_TEST_PORTFOLIO_FIRST",
+    )
+    engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="add_task",
+            confidence=0.9,
+            task=ExtractedTask(title="Update my portfolio bullets", deadline_text="wednesday"),
+        ),
+        raw_text="update my portfolio bullets by wednesday",
+        source_message_id=first_inbound.id,
+    )
+    second_inbound = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="actually portfolio bullets can wait till friday",
+        external_id="SM_TEST_PORTFOLIO_SECOND",
+    )
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(
+            intent="update_task",
+            confidence=0.88,
+            time_reference="friday",
+            task_updates={"action": "reschedule"},
+        ),
+        raw_text="actually portfolio bullets can wait till friday",
+        source_message_id=second_inbound.id,
+    )
+    db_session.commit()
+
+    task = db_session.execute(select(Task).where(Task.user_id == user.id)).scalars().one()
+    assert task.deadline_source_phrase == "friday"
+    assert task.source_message_id == second_inbound.id
+    assert outcome.key_facts_to_include == ["bet, switched it"]
+
+
 def test_default_next_step_does_not_repeat_submit_for_submit_titles():
     step = StateEngine._default_next_step("Submit my scout job application")
     lowered = step.lower()

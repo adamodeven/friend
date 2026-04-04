@@ -145,6 +145,16 @@ class IntentExtractor:
                 time_confidence=0.85,
                 task_updates={"action": "reschedule"},
             )
+        embedded_time_reference = self._extract_reschedule_time_update(lowered, timezone)
+        if embedded_time_reference:
+            return IntentResult(
+                intent="update_task",
+                confidence=0.88,
+                summary="task timing update requested",
+                time_reference=embedded_time_reference,
+                time_confidence=0.82,
+                task_updates={"action": "reschedule"},
+            )
         reminder_task = self._extract_reminder_style_task(text, timezone)
         looks_timeline_query = self._looks_like_timeline_query_message(lowered)
         candidate_tasks = self._extract_tasks_from_text(text, timezone)
@@ -937,6 +947,28 @@ class IntentExtractor:
         parsed = interpret_time_reference(candidate, timezone=timezone)
         if parsed.source_phrase and (parsed.deadline_at or parsed.soft_deadline_at):
             return candidate
+        return None
+
+    @classmethod
+    def _extract_reschedule_time_update(cls, text: str, timezone: str) -> str | None:
+        if "?" in text:
+            return None
+        patterns = (
+            r"\b(?:can wait|can move|can slide)\s+(?:till|until|to)\s+(.+)$",
+            r"\b(?:move|push|bump|slide|delay|resched(?:ule)?)\b.*?\b(?:to|for|until|till)\s+(.+)$",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            candidate = match.group(1).strip()
+            candidate = re.sub(r"\s+instead$", "", candidate).strip()
+            candidate = re.sub(r"\s+", " ", candidate)
+            if not cls._looks_like_followup_time_phrase(candidate):
+                continue
+            parsed = interpret_time_reference(candidate, timezone=timezone)
+            if parsed.source_phrase and (parsed.deadline_at or parsed.soft_deadline_at):
+                return candidate
         return None
 
     @staticmethod

@@ -218,6 +218,14 @@ def test_followup_time_correction_strips_informal_do_and_instead():
     assert result.task_updates.get("action") == "reschedule"
 
 
+def test_embedded_reschedule_update_detects_can_wait_till_phrase():
+    extractor = IntentExtractor()
+    result = extractor.extract("actually portfolio bullets can wait till friday", "America/New_York")
+    assert result.intent == "update_task"
+    assert result.time_reference == "friday"
+    assert result.task_updates.get("action") == "reschedule"
+
+
 def test_assignment_detail_followup_is_not_misclassified_as_time_only_reschedule():
     extractor = IntentExtractor()
     result = extractor.extract("actually its for studio and due tuesday night", "America/New_York")

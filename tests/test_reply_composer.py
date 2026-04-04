@@ -723,7 +723,7 @@ def test_acknowledge_new_task_multi_task_shortcuts_preserve_conversational_seque
             latest_user_message="i need to finish the enclosure cad by tomorrow night and pay rent tonight and text my roommate tomorrow morning",
             key_facts_to_include=[
                 "i'd start with finish the enclosure cad",
-                "then just clear rent so it stops hanging there",
+                "then just clear rent",
             ],
             is_multi_task_turn=True,
             should_push_for_action=True,
@@ -733,7 +733,7 @@ def test_acknowledge_new_task_multi_task_shortcuts_preserve_conversational_seque
     )
     assert reply.messages == [
         "i'd start with finish the enclosure cad",
-        "then just clear rent so it stops hanging there",
+        "then just clear rent",
     ]
 
 
@@ -781,6 +781,24 @@ def test_postprocess_drops_redundant_ack_after_timing_shift():
         brief,
     )
     assert messages == ["bet, switched it"]
+
+
+def test_confirm_update_shortcuts_simple_reschedule_without_extra_prompting():
+    adapter = FakeAdapter(
+        ["yep, friday works for those. i can reshuffle the rest too if you want"],
+        enabled=True,
+        json_responses=[{"messages": ["yep, friday works for those. i can reshuffle the rest too if you want"]}],
+    )
+    composer = ConversationComposer(adapter=adapter)
+    reply = composer.compose(
+        ReplyBrief(
+            response_goal="confirm_update",
+            latest_user_message="actually portfolio bullets can wait till friday",
+            key_facts_to_include=["yep, friday works for those.", "i'd keep the rest as-is for now."],
+            generated_at=datetime.now(),
+        )
+    )
+    assert reply.messages == ["yep, friday works for those."]
 
 
 def test_progress_followup_question_stays_short_and_human():

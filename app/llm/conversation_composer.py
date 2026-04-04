@@ -1142,8 +1142,10 @@ class ConversationComposer:
         if not lowered_message.startswith(("actually ", "wait ", "nah ", "make that ", "change it to ")):
             return False
         lowered_fact = first_fact.lower()
-        return "switched it" in lowered_fact or lowered_fact.startswith(
-            ("okay ", "tomorrow", "monday", "tonight", "this ", "next ")
+        if "remind you" in lowered_fact or "keep tabs on it" in lowered_fact or "keep track of it" in lowered_fact:
+            return False
+        return "switched it" in lowered_fact or "works for" in lowered_fact or lowered_fact.startswith(
+            ("okay ", "bet", "tomorrow", "monday", "tonight", "this ", "next ")
         )
 
     @staticmethod

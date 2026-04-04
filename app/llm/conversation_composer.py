@@ -614,11 +614,11 @@ class ConversationComposer:
                 joined = ", ".join(compact_items[:-1]) + f", then {compact_items[-1]}"
                 return f"{heading} it's {joined}."
             if len(compact_items) == 1:
-                return f"for {heading}, it's just {compact_items[0]}."
+                return f"for {heading}, the main thing is {compact_items[0]}."
             if len(compact_items) == 2:
-                return f"for {heading}, it's {compact_items[0]}, then {compact_items[1]}."
+                return f"for {heading}, i'd keep it on {compact_items[0]}, then {compact_items[1]}."
             joined = ", ".join(compact_items[:-1]) + f", then {compact_items[-1]}"
-            return f"for {heading}, it's {joined}."
+            return f"for {heading}, i'd keep it on {joined}."
 
         if len(compact_items) == 1:
             return compact_items[0]
@@ -647,6 +647,12 @@ class ConversationComposer:
         if lowered.startswith("email "):
             subject = cleaned[6:].strip()
             cleaned = f"{subject} email" if subject.lower().startswith("the ") else f"the {subject} email"
+        elif lowered.startswith("send "):
+            subject = cleaned[5:].strip()
+            if subject and not subject.lower().startswith(("the ", "my ", "a ", "an ")):
+                cleaned = f"the {subject}"
+            elif subject:
+                cleaned = subject
         elif lowered.startswith("text "):
             cleaned = f"texting {cleaned[5:].strip()}"
         elif lowered.startswith("call "):

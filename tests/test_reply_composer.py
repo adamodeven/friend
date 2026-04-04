@@ -918,7 +918,7 @@ def test_timeline_summary_project_view_uses_for_label_not_heading_literal():
         generated_at=datetime.now(),
     )
     messages = ConversationComposer(adapter=FakeAdapter([], enabled=False)).compose(brief)
-    assert messages.messages == ["for enclosure, it's just finish the enclosure cad by sun 4/5."]
+    assert messages.messages == ["for enclosure, the main thing is finish the enclosure cad by sun 4/5."]
 
 
 def test_timeline_summary_empty_window_reads_more_naturally():

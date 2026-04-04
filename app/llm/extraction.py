@@ -14,6 +14,7 @@ class IntentExtractor:
     _TASK_START_PATTERN = (
         r"(?:i\s+)?(?:need to|have to|gotta|must|should|want to|submit|finish|send|write|prepare|study|"
         r"review|fix|build|make|do|call|email|text|update|work on|start|complete|wrap|clean|buy|plan|"
+        r"remind me to|dont let me forget to|don't let me forget to|make sure i|make sure i remember to|"
         r"schedule|reply|apply|pay|draft|upload|design|model|export|print)"
     )
     _WINDOWED_ACTION_VERBS = (
@@ -150,9 +151,12 @@ class IntentExtractor:
             "weekend",
             "next hour",
         ]
+        reminder_task = self._extract_reminder_style_task(text, timezone)
         looks_timeline_query = any(token in lowered for token in timeline_query_cues)
         candidate_tasks = self._extract_tasks_from_text(text, timezone)
-        looks_add_task = bool(candidate_tasks) or any(token in lowered for token in ["need to", "have to", "gotta", "assignment"])
+        looks_add_task = bool(candidate_tasks or reminder_task) or any(
+            token in lowered for token in ["need to", "have to", "gotta", "assignment", "remind me to", "dont let me forget", "don't let me forget", "make sure i"]
+        )
         has_context_signal = any(token in lowered for token in ["in class", "driving", "at dinner", "all nighter", "in a meeting"])
         placeholder_assignment = self._placeholder_assignment_task(lowered, timezone)
         if looks_timeline_query and ("?" in lowered or lowered.startswith("what do i") or lowered.startswith("what's due")):
@@ -197,7 +201,7 @@ class IntentExtractor:
             return IntentResult(intent=intent, confidence=confidence, summary="user asked assistant capabilities")
         elif looks_add_task:
             intent = "add_task"
-            tasks = [placeholder_assignment] if placeholder_assignment else (candidate_tasks or self._extract_tasks_from_text(lowered, timezone))
+            tasks = [placeholder_assignment] if placeholder_assignment else ([reminder_task] if reminder_task else (candidate_tasks or self._extract_tasks_from_text(lowered, timezone)))
             if not tasks:
                 extracted_title = self._simple_task_title(lowered)
                 deadline_text = self._extract_deadline_phrase(lowered)
@@ -404,6 +408,8 @@ class IntentExtractor:
             r"\bbefore [^,.;!?]+",
             r"\bby eod\b",
             r"\beod\b",
+            r"\btmr(?: morning| night)?\b",
+            r"\btn\b",
             r"\btomorrow(?: morning| night)?\b",
             r"\btonight\b",
             r"\bthis weekend\b",
@@ -416,6 +422,35 @@ class IntentExtractor:
             if match:
                 return match.group(0)
         return None
+
+    def _extract_reminder_style_task(self, text: str, timezone: str) -> ExtractedTask | None:
+        lowered = text.lower().strip()
+        patterns = (
+            r"(?:^|.*?\b)(?:dont let me forget to|don't let me forget to)\s+(.+)$",
+            r"(?:^|.*?\b)remind me to\s+(.+)$",
+            r"(?:^|.*?\b)make sure i(?: remember to)?\s+(.+)$",
+        )
+        captured: str | None = None
+        for pattern in patterns:
+            match = re.search(pattern, lowered)
+            if match:
+                captured = match.group(1).strip()
+                break
+        if not captured:
+            return None
+
+        deadline_text = self._extract_deadline_phrase(captured)
+        task = self._build_task_from_segment(
+            captured,
+            timezone=timezone,
+            deadline_text_override=deadline_text,
+        )
+        if task is None:
+            return None
+        task.action_kind = task.action_kind or infer_action_kind(task.title, deadline_text=task.deadline_text, start_after=task.start_after)
+        task.next_step = None if task.action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN} else task.next_step
+        task.confidence = max(task.confidence, 0.84)
+        return task
 
     def _extract_tasks_from_text(self, text: str, timezone: str) -> list[ExtractedTask]:
         tasks: list[ExtractedTask] = []

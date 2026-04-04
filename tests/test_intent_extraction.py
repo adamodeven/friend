@@ -204,6 +204,15 @@ def test_followup_time_correction_maps_to_update_not_new_task():
     assert result.task_updates.get("action") == "reschedule"
 
 
+def test_dont_let_me_forget_intake_creates_reminder_style_task():
+    extractor = IntentExtractor()
+    result = extractor.extract("yo dont let me forget to email the scout recruiter tmr morning", "America/New_York")
+    assert result.intent == "add_task"
+    assert result.task is not None
+    assert result.task.title.lower() == "email the scout recruiter"
+    assert result.task.deadline_text == "tmr morning"
+
+
 def test_fallback_multitask_split_keeps_clean_titles_with_trailing_preposition_removed():
     extractor = IntentExtractor()
     result = extractor.extract(

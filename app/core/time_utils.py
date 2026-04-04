@@ -13,8 +13,11 @@ from app.schemas.intent import ParsedDeadline
 _LATER_PHRASES = {"later", "sometime", "eventually"}
 _TASK_TIME_PHRASES = (
     "tonight",
+    "tn",
     "tomorrow morning",
+    "tmr morning",
     "tomorrow night",
+    "tmr night",
     "this weekend",
     "after class",
     "before studio",
@@ -115,7 +118,7 @@ def _parse_special_time_phrase(
     weekday_part = _parse_weekday_part_phrase(text, base=base, timezone=timezone, source_phrase=source_phrase)
     if weekday_part is not None:
         return weekday_part
-    if "tomorrow morning" in text:
+    if "tomorrow morning" in text or "tmr morning" in text:
         start = _at_local(base, days=1, hour=8, minute=0)
         return _build_deadline(
             source_phrase=source_phrase,
@@ -125,7 +128,7 @@ def _parse_special_time_phrase(
             confidence=0.78,
             granularity="part_of_day",
         )
-    if "tomorrow night" in text:
+    if "tomorrow night" in text or "tmr night" in text:
         start = _at_local(base, days=1, hour=18, minute=0)
         return _build_deadline(
             source_phrase=source_phrase,
@@ -135,7 +138,7 @@ def _parse_special_time_phrase(
             confidence=0.76,
             granularity="part_of_day",
         )
-    if "tonight" in text:
+    if "tonight" in text or re_match_word(text, "tn"):
         start = _at_local(base, days=0, hour=18, minute=0)
         end = _at_local(base, days=0, hour=21, minute=0)
         if end <= base:

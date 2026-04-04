@@ -39,6 +39,15 @@ class TimelineService:
         now = datetime.now(tz=ZoneInfo(timezone))
         end = now.replace(hour=23, minute=59, second=59, microsecond=0)
         ranked = self._ranked_tasks(session, user_id, timezone, horizon=end)
+        filtered = self._filter_window_relevant_tasks(
+            ranked,
+            start=now,
+            end=end,
+            timezone=timezone,
+            include_near_term_work=True,
+        )
+        if filtered:
+            return self._render_plan("today", filtered[:5], timezone)
         if not ranked:
             return "today is clear right now. we can pick one high-impact move."
         return self._render_plan("today", ranked[:5], timezone)
@@ -55,6 +64,15 @@ class TimelineService:
         now = datetime.now(tz=ZoneInfo(timezone))
         tonight_end = now.replace(hour=23, minute=59, second=59, microsecond=0)
         ranked = self._ranked_tasks(session, user_id, timezone, horizon=tonight_end)
+        filtered = self._filter_window_relevant_tasks(
+            ranked,
+            start=now,
+            end=tonight_end,
+            timezone=timezone,
+            include_near_term_work=True,
+        )
+        if filtered:
+            return self._render_plan("tonight", filtered[:5], timezone)
         if not ranked:
             return "tonight is clear right now."
         return self._render_plan("tonight", ranked[:5], timezone)
@@ -319,6 +337,56 @@ class TimelineService:
             return False
         start_after = task.start_after if task.start_after.tzinfo else task.start_after.replace(tzinfo=start.tzinfo)
         return start <= start_after <= end
+
+    def _filter_window_relevant_tasks(
+        self,
+        ranked: list[RankedTask],
+        *,
+        start: datetime,
+        end: datetime,
+        timezone: str,
+        include_near_term_work: bool,
+    ) -> list[RankedTask]:
+        filtered: list[RankedTask] = []
+        for rank in ranked:
+            if self._rank_is_relevant_for_window(
+                rank,
+                start=start,
+                end=end,
+                timezone=timezone,
+                include_near_term_work=include_near_term_work,
+            ):
+                filtered.append(rank)
+        return filtered
+
+    def _rank_is_relevant_for_window(
+        self,
+        rank: RankedTask,
+        *,
+        start: datetime,
+        end: datetime,
+        timezone: str,
+        include_near_term_work: bool,
+    ) -> bool:
+        task = rank.task
+        action_kind = self._task_action_kind(task)
+        is_quick_action = action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}
+        start_after = self._ensure_tz(task.start_after, start.tzinfo) if task.start_after else None
+        due_at = self._ensure_tz(task.deadline_at, start.tzinfo) if task.deadline_at else None
+
+        if self._is_due_between(task, start, end) or self._starts_between(task, start, end):
+            return True
+        if rank.unlocks:
+            return True
+        if not include_near_term_work:
+            return False
+        if is_quick_action:
+            return False
+        if start_after is not None and start_after > end:
+            return False
+        if due_at is not None and due_at <= end + timedelta(hours=36):
+            return True
+        return rank.actionable and rank.score >= 140
 
     @staticmethod
     def _default_move_text(task_title: str) -> str:

@@ -108,6 +108,62 @@ def test_recommend_next_task_waits_on_windowed_email_and_prefers_cad_tonight(db_
     assert "for" in morning_view
 
 
+def test_tonight_view_keeps_real_work_and_excludes_future_reminder_only_items(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    tz = ZoneInfo(user.timezone)
+    now = datetime.now(tz=tz)
+    tomorrow_morning = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+    monday_morning = (now + timedelta(days=((7 - now.weekday()) % 7 or 7))).replace(hour=9, minute=0, second=0, microsecond=0)
+
+    create_task(
+        db_session,
+        user_id=user.id,
+        title="Send scout followup",
+        priority=4,
+        deadline_at=monday_morning,
+        start_after=monday_morning,
+        deadline_source_phrase="monday morning",
+        metadata_json={"action_kind": "quick_message"},
+    )
+    create_task(
+        db_session,
+        user_id=user.id,
+        title="Text roommate back",
+        priority=3,
+        deadline_at=tomorrow_morning.replace(hour=10),
+        start_after=tomorrow_morning,
+        deadline_source_phrase="tomorrow morning",
+        metadata_json={"action_kind": "quick_message"},
+    )
+    create_task(
+        db_session,
+        user_id=user.id,
+        title="Pay rent",
+        priority=4,
+        deadline_at=now.replace(hour=21, minute=0, second=0, microsecond=0),
+        deadline_source_phrase="tonight",
+        metadata_json={"action_kind": "quick_admin"},
+    )
+    create_task(
+        db_session,
+        user_id=user.id,
+        title="Finish enclosure CAD",
+        priority=5,
+        deadline_at=(now + timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0),
+        metadata_json={"action_kind": "project_chunk"},
+    )
+    db_session.commit()
+
+    service = TimelineService()
+    text = service.build_tonight_view(db_session, user.id, user.timezone).lower()
+
+    assert "finish enclosure cad" in text
+    assert "pay rent" in text
+    assert "send scout followup" not in text
+    assert "text roommate back" not in text
+
+
 def test_recommend_next_task_does_not_push_future_quick_message_over_real_work(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None

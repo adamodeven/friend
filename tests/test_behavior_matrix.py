@@ -133,7 +133,7 @@ def test_state_matrix_asks_for_prioritization_when_load_is_wide_and_loose(db_ses
         raw_text="tonight i need to clean up portfolio bullets, pay rent, fix the website, and reply to that club email",
     )
     assert outcome.should_ask_question is True
-    assert outcome.question_if_needed == "which one of those actually has the least wiggle room?"
+    assert outcome.question_if_needed == "which one turns into a problem first if it slips?"
 
 
 def test_state_matrix_placeholder_assignment_without_details_prompts_for_followup(db_session):

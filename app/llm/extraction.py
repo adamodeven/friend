@@ -137,25 +137,8 @@ class IntentExtractor:
                 time_confidence=0.85,
                 task_updates={"action": "reschedule"},
             )
-        timeline_query_cues = [
-            "what do i have",
-            "what's due",
-            "what do i need to get done",
-            "deadlines",
-            "plan for",
-            "today",
-            "this week",
-            "tonight",
-            "tomorrow morning",
-            "tmr morning",
-            "tomorrow night",
-            "tmr night",
-            "this weekend",
-            "weekend",
-            "next hour",
-        ]
         reminder_task = self._extract_reminder_style_task(text, timezone)
-        looks_timeline_query = any(token in lowered for token in timeline_query_cues)
+        looks_timeline_query = self._looks_like_timeline_query_message(lowered)
         candidate_tasks = self._extract_tasks_from_text(text, timezone)
         looks_add_task = bool(candidate_tasks or reminder_task) or any(
             token in lowered for token in ["need to", "have to", "gotta", "assignment", "remind me to", "dont let me forget", "don't let me forget", "make sure i"]
@@ -255,6 +238,58 @@ class IntentExtractor:
             confidence = 0.7
 
         return IntentResult(intent=intent, confidence=confidence, context_signal=context_signal, task=task)
+
+    @staticmethod
+    def _looks_like_timeline_query_message(text: str) -> bool:
+        lowered = text.lower().strip()
+        if not lowered:
+            return False
+
+        explicit_query_cues = (
+            "what do i have",
+            "what's due",
+            "what do i need to get done",
+            "what should i do",
+            "what's the plan",
+            "plan for",
+            "deadlines",
+            "what slipped",
+            "why am i behind",
+            "what about ",
+        )
+        if any(cue in lowered for cue in explicit_query_cues):
+            return True
+
+        temporal_pattern = (
+            r"(today|tonight|this week|tomorrow(?: morning| night)?|tmr(?: morning| night)?|"
+            r"this weekend|weekend|next hour|monday(?: morning| night)?|tuesday(?: morning| night)?|"
+            r"wednesday(?: morning| night)?|thursday(?: morning| night)?|friday(?: morning| night)?|"
+            r"saturday(?: morning| night)?|sunday(?: morning| night)?)"
+        )
+        temporal_match = re.search(rf"\b{temporal_pattern}\b", lowered)
+        if not temporal_match:
+            return False
+
+        stripped = lowered.strip(" ?!.")
+        if re.fullmatch(temporal_pattern, stripped):
+            return True
+        if re.fullmatch(rf"(what about|how about)\s+{temporal_pattern}", stripped):
+            return True
+        if "?" not in lowered:
+            return False
+
+        query_markers = (
+            "what",
+            "due",
+            "plan",
+            "have",
+            "need",
+            "should",
+            "clear",
+            "free",
+            "on ",
+        )
+        return any(marker in lowered for marker in query_markers)
 
     def _merge_llm_and_fallback(
         self,

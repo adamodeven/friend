@@ -103,8 +103,7 @@ class StateEngine:
                 task = bundle.root_tasks[0]
                 outcome.key_facts_to_include.append(self._new_task_fact(task, user.timezone))
             else:
-                outcome.key_facts_to_include.append(f"okay, that's {len(bundle.root_tasks)} different things")
-                outcome.key_facts_to_include.append("i'm holding " + ", ".join(task.title for task in bundle.root_tasks[:3]))
+                outcome.key_facts_to_include.append("okay that's a real stack")
             if bundle.subtask_count:
                 outcome.key_facts_to_include.append(f"i broke one of those into {bundle.subtask_count} smaller step{'s' if bundle.subtask_count != 1 else ''}")
             if bundle.dependency_count:
@@ -148,6 +147,10 @@ class StateEngine:
                     outcome.key_facts_to_include.append(f"i'll circle back around {scheduled}")
 
             preferred_new_focus = self._preferred_focus_from_new_tasks(bundle.root_tasks, user.timezone)
+            if len(bundle.root_tasks) > 1 and preferred_new_focus:
+                focus_fact = self._crowded_load_focus_fact(preferred_new_focus)
+                if focus_fact:
+                    outcome.key_facts_to_include.append(focus_fact)
             if preferred_new_focus and self._should_push_new_task_focus(
                 preferred_new_focus,
                 task_count=len(bundle.root_tasks),
@@ -183,7 +186,7 @@ class StateEngine:
                 outcome.question_if_needed = "want me to break that into 2 quick checkpoints?"
             elif len(bundle.root_tasks) >= 3 and self._should_ask_load_prioritization_question(bundle.root_tasks):
                 outcome.should_ask_question = True
-                outcome.question_if_needed = "which one of those actually has the least wiggle room?"
+                outcome.question_if_needed = "which one turns into a problem first if it slips?"
                 outcome.should_push_for_action = False
                 outcome.suggested_next_step = None
             else:
@@ -223,9 +226,9 @@ class StateEngine:
                     outcome.should_push_for_action = True
                     outcome.should_ask_question = False
             else:
-                outcome.key_facts_to_include.append("completion noted, but task match was uncertain")
+                outcome.key_facts_to_include.append("bet")
                 outcome.should_ask_question = True
-                outcome.question_if_needed = "which task should i mark done exactly?"
+                outcome.question_if_needed = "which one was that exactly?"
 
         elif intent.intent == "timeline_query":
             outcome.response_goal = "timeline_summary"
@@ -1529,6 +1532,15 @@ class StateEngine:
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
             return "okay bet, i got you"
         return f"got {task.title}"
+
+    def _crowded_load_focus_fact(self, task: Task) -> str | None:
+        action_kind = self._task_action_kind(task)
+        lowered_title = task.title[0].lower() + task.title[1:] if task.title else ""
+        if not lowered_title:
+            return None
+        if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+            return None
+        return f"the main thing i'd keep in front is {lowered_title}"
 
     @staticmethod
     def _quick_reminder_fact(time_phrase: str, *, is_admin: bool) -> str:

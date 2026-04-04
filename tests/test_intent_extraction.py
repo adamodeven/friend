@@ -40,6 +40,12 @@ def test_extract_timeline_query():
     assert result.intent == "timeline_query"
 
 
+def test_social_text_with_today_does_not_route_to_timeline_query():
+    extractor = IntentExtractor()
+    result = extractor.extract("lmao campus was chaos today", "America/New_York")
+    assert result.intent == "general_chat"
+
+
 def test_extract_status_query():
     extractor = IntentExtractor()
     result = extractor.extract("what do you do?", "America/New_York")

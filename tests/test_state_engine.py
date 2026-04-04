@@ -69,7 +69,7 @@ def test_add_task_persists_multiple_tasks_subtasks_and_dependencies(db_session):
     assert email_task.status == TaskStatus.blocked
     assert {dependency.predecessor_task_id for dependency in dependencies} == {subtask.id, prerequisite.id}
     assert outcome.is_multi_task_turn is True
-    assert any("2 different things" in fact for fact in outcome.key_facts_to_include)
+    assert "okay that's a real stack" in outcome.key_facts_to_include
     assert any("broke one of those into 1 smaller step" in fact for fact in outcome.key_facts_to_include)
     assert any("dependency" in fact for fact in outcome.key_facts_to_include)
 
@@ -649,6 +649,23 @@ def test_complete_task_unblocks_successor_and_surfaces_next_action(db_session):
     assert "send recruiter email" in (outcome.suggested_next_step or "").lower()
 
 
+def test_complete_task_with_uncertain_match_asks_softer_followup(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=IntentResult(intent="complete_task", confidence=0.9),
+        raw_text="bet website fix is done",
+    )
+
+    assert outcome.response_goal == "react_to_progress"
+    assert outcome.key_facts_to_include == ["bet"]
+    assert outcome.should_ask_question is True
+    assert outcome.question_if_needed == "which one was that exactly?"
+
+
 def test_multi_task_add_with_limited_timing_asks_one_prioritization_question(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None
@@ -672,7 +689,7 @@ def test_multi_task_add_with_limited_timing_asks_one_prioritization_question(db_
 
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_ask_question is True
-    assert outcome.question_if_needed == "which one of those actually has the least wiggle room?"
+    assert outcome.question_if_needed == "which one turns into a problem first if it slips?"
 
 
 def test_repeat_task_mention_reuses_existing_active_task(db_session):

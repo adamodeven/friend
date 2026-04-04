@@ -122,7 +122,13 @@ class StateEngine:
                     outcome.urgency_level = self._urgency_from_deadline(earliest.deadline_at, user.timezone)
             elif bundle.deadline_tasks:
                 outcome.mention_deadline = True
-            if bundle.reminder_count and len(bundle.root_tasks) == 1 and not intent.context_signal:
+            if (
+                bundle.reminder_count
+                and len(bundle.root_tasks) == 1
+                and not intent.context_signal
+                and not bundle.root_tasks[0].deadline_is_ambiguous
+                and (bundle.root_tasks[0].deadline_at is not None or bundle.root_tasks[0].start_after is not None)
+            ):
                 task = bundle.root_tasks[0]
                 pending = self._next_pending_reminder_for_task(session, task.id)
                 if pending:
@@ -526,7 +532,12 @@ class StateEngine:
                 )
             )
             bundle.deadline_tasks.append(task)
-        if deadline_is_ambiguous and bundle.ambiguous_deadline_task is None:
+        if (
+            deadline_is_ambiguous
+            and bundle.ambiguous_deadline_task is None
+            and deadline_source
+            and self._time_reference_needs_followup(deadline_source)
+        ):
             bundle.ambiguous_deadline_task = task
             bundle.ambiguous_time_reference = deadline_source or extracted.deadline_text or "that time"
 

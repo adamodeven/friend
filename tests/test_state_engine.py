@@ -201,6 +201,7 @@ def test_add_task_with_later_time_keeps_it_soft_without_immediate_clarification(
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_ask_question is False
     assert outcome.question_if_needed is None
+    assert all("circle back around" not in fact for fact in outcome.key_facts_to_include)
 
 
 def test_bulk_clear_archives_active_tasks_and_pending_reminders(db_session):

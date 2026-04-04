@@ -329,17 +329,21 @@ class StateEngine:
                             outcome.key_facts_to_include.append(f"that takes {archived_count - 1} linked subtasks with it")
                         applied_change = True
                     if intent.time_reference:
-                        parsed_deadline = interpret_time_reference(intent.time_reference, timezone=user.timezone)
+                        effective_time_reference = self._merge_reschedule_time_reference(
+                            incoming_reference=intent.time_reference,
+                            task=matched,
+                        )
+                        parsed_deadline = interpret_time_reference(effective_time_reference, timezone=user.timezone)
                         if parsed_deadline.deadline_at or parsed_deadline.soft_deadline_at:
                             action_kind = self._task_action_kind(matched)
                             is_window_phrase = (
                                 parsed_deadline.granularity in {"hour", "part_of_day"}
-                                and not intent.time_reference.lower().strip().startswith(("by ", "before ", "due "))
+                                and not effective_time_reference.lower().strip().startswith(("by ", "before ", "due "))
                             )
                             matched.deadline_at = parsed_deadline.deadline_at
                             matched.soft_deadline_at = parsed_deadline.soft_deadline_at
                             matched.start_after = parsed_deadline.soft_deadline_at if is_window_phrase else None
-                            matched.deadline_source_phrase = intent.time_reference
+                            matched.deadline_source_phrase = effective_time_reference
                             matched.deadline_confidence = max(matched.deadline_confidence, parsed_deadline.confidence)
                             matched.extraction_confidence = max(matched.extraction_confidence, parsed_deadline.confidence)
                             matched.deadline_is_ambiguous = parsed_deadline.is_ambiguous
@@ -348,7 +352,7 @@ class StateEngine:
                             matched.source_message_id = source_message_id or matched.source_message_id
                             if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN} and not is_window_phrase:
                                 matched.start_after = None
-                            time_phrase = self._reschedule_phrase(parsed_deadline, intent.time_reference, user.timezone)
+                            time_phrase = self._reschedule_phrase(parsed_deadline, effective_time_reference, user.timezone)
                             outcome.key_facts_to_include.append(self._reschedule_ack_text(time_phrase))
                             outcome.mention_deadline = True
                             applied_change = True
@@ -551,6 +555,15 @@ class StateEngine:
         deadline_is_ambiguous = extracted.deadline.is_ambiguous if extracted.deadline else False
         deadline_granularity = extracted.deadline.granularity if extracted.deadline else "unknown"
         deadline_timezone = extracted.deadline.timezone if extracted.deadline else user.timezone
+        if deadline_source and deadline_at is None and soft_deadline_at is None:
+            parsed_deadline = interpret_time_reference(deadline_source, timezone=user.timezone)
+            if parsed_deadline.deadline_at is not None or parsed_deadline.soft_deadline_at is not None:
+                deadline_at = parsed_deadline.deadline_at
+                soft_deadline_at = parsed_deadline.soft_deadline_at
+                deadline_confidence = max(deadline_confidence, parsed_deadline.confidence)
+                deadline_is_ambiguous = parsed_deadline.is_ambiguous
+                deadline_granularity = parsed_deadline.granularity
+                deadline_timezone = parsed_deadline.timezone or deadline_timezone
         action_kind = extracted.action_kind or infer_action_kind(
             extracted.title,
             deadline_text=deadline_source,
@@ -561,9 +574,16 @@ class StateEngine:
             "source_text": raw_text,
             "extracted_blockers": extracted.blockers,
             "declared_dependency_titles": [dependency.title for dependency in extracted.dependencies],
-            "timing_kind": "windowed_action" if extracted.start_after else "deadline",
             "action_kind": action_kind,
         }
+        effective_start_after = extracted.start_after
+        if (
+            effective_start_after is None
+            and deadline_granularity in {"hour", "part_of_day"}
+            and action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}
+        ):
+            effective_start_after = soft_deadline_at
+        metadata["timing_kind"] = "windowed_action" if effective_start_after else "deadline"
 
         task = self._find_reusable_task(
             session,
@@ -585,7 +605,7 @@ class StateEngine:
                 next_step=next_step,
                 deadline_at=deadline_at,
                 soft_deadline_at=soft_deadline_at,
-                start_after=extracted.start_after,
+                start_after=effective_start_after,
                 deadline_source_phrase=deadline_source,
                 deadline_confidence=deadline_confidence,
                 deadline_is_ambiguous=deadline_is_ambiguous,
@@ -1216,6 +1236,38 @@ class StateEngine:
             return "okay bet, i moved it"
         return f"okay bet, i moved it to {phrase}"
 
+    @staticmethod
+    def _merge_reschedule_time_reference(*, incoming_reference: str, task: Task) -> str:
+        cleaned = humanize_window_phrase(incoming_reference) or incoming_reference
+        cleaned = cleaned.strip().lower()
+        if not cleaned:
+            return incoming_reference
+
+        if any(part in cleaned for part in ("morning", "afternoon", "evening", "night", "tonight")):
+            return cleaned
+
+        existing_phrase = (task.deadline_source_phrase or "").strip().lower()
+        if not existing_phrase:
+            return cleaned
+
+        existing_part = next(
+            (part for part in ("morning", "afternoon", "evening", "night") if part in existing_phrase),
+            None,
+        )
+        if existing_part is None:
+            return cleaned
+
+        if task.deadline_granularity != "part_of_day" and task.start_after is None:
+            return cleaned
+
+        if cleaned in {"today", "tomorrow"} or re.match(
+            r"^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$",
+            cleaned,
+        ):
+            return f"{cleaned} {existing_part}"
+
+        return cleaned
+
     def _refresh_task_block_state(self, task: Task) -> bool:
         unresolved = [link.predecessor_task for link in task.successor_links if link.predecessor_task.status != TaskStatus.completed]
         if unresolved:
@@ -1387,6 +1439,13 @@ class StateEngine:
             task.soft_deadline_at = soft_deadline_at
         if extracted.start_after is not None:
             task.start_after = extracted.start_after
+        elif (
+            task.start_after is None
+            and deadline_granularity in {"hour", "part_of_day"}
+            and soft_deadline_at is not None
+            and action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}
+        ):
+            task.start_after = soft_deadline_at
         if deadline_source:
             task.deadline_source_phrase = deadline_source
         task.deadline_confidence = max(task.deadline_confidence, deadline_confidence)

@@ -305,6 +305,61 @@ def test_time_only_followup_updates_recent_relevant_task_instead_of_creating_new
     assert outcome.key_facts_to_include == ["okay bet, i moved it"]
 
 
+def test_day_only_followup_preserves_existing_part_of_day_window(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    first_inbound = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="dont let me forget to email the scout recruiter tmr morning",
+        external_id="SM_TEST_DAY_ONLY_FIRST",
+    )
+    engine = StateEngine()
+    add_intent = IntentResult(
+        intent="add_task",
+        confidence=0.92,
+        task=ExtractedTask(
+            title="Email the scout recruiter",
+            deadline_text="tomorrow morning",
+            action_kind="quick_message",
+        ),
+    )
+    engine.apply_intent(
+        db_session,
+        user=user,
+        intent=add_intent,
+        raw_text="dont let me forget to email the scout recruiter tmr morning",
+        source_message_id=first_inbound.id,
+    )
+    second_inbound = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="actually do monday instead",
+        external_id="SM_TEST_DAY_ONLY_SECOND",
+    )
+    update_intent = IntentResult(
+        intent="update_task",
+        confidence=0.9,
+        time_reference="monday",
+        task_updates={"action": "reschedule"},
+    )
+    engine.apply_intent(
+        db_session,
+        user=user,
+        intent=update_intent,
+        raw_text="actually do monday instead",
+        source_message_id=second_inbound.id,
+    )
+    db_session.commit()
+
+    task = db_session.execute(select(Task).where(Task.user_id == user.id)).scalars().one()
+    assert task.deadline_source_phrase == "monday morning"
+    assert task.deadline_granularity == "part_of_day"
+    assert task.start_after is not None
+
+
 def test_default_next_step_does_not_repeat_submit_for_submit_titles():
     step = StateEngine._default_next_step("Submit my scout job application")
     lowered = step.lower()

@@ -296,6 +296,58 @@ def test_behavior_matrix_followup_reschedule_updates_same_reminder_task(db_sessi
     assert outcome.key_facts_to_include == ["okay bet, i moved it"]
 
 
+def test_behavior_matrix_day_only_reschedule_keeps_previous_morning_window(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+
+    first_message = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="yo dont let me forget to email the scout recruiter tmr morning",
+        external_id="SM_MATRIX_DAY_1",
+    )
+    first_intent = IntentResult(
+        intent="add_task",
+        confidence=0.92,
+        task=ExtractedTask(
+            title="Email the scout recruiter",
+            deadline_text="tomorrow morning",
+            action_kind="quick_message",
+        ),
+    )
+    engine.apply_intent(
+        db_session,
+        user=user,
+        intent=first_intent,
+        raw_text="yo dont let me forget to email the scout recruiter tmr morning",
+        source_message_id=first_message.id,
+    )
+
+    second_message = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="actually do monday instead",
+        external_id="SM_MATRIX_DAY_2",
+    )
+    second_intent = IntentExtractor().extract("actually do monday instead", user.timezone)
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=second_intent,
+        raw_text="actually do monday instead",
+        source_message_id=second_message.id,
+    )
+    db_session.commit()
+
+    task = db_session.execute(select(Task).where(Task.user_id == user.id)).scalars().one()
+    assert task.deadline_source_phrase == "monday morning"
+    assert task.start_after is not None
+    assert outcome.key_facts_to_include == ["okay bet, i moved it"]
+
+
 def test_behavior_matrix_tmr_morning_query_uses_actual_timeline_window(db_session):
     user = db_session.execute(select(User)).scalars().first()
     assert user is not None

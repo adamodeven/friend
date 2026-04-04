@@ -8,8 +8,9 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.time_utils import parse_human_time, time_window_for_context
-from app.db.models import DeadlineEvent, PlanningNote, Project, Reminder, ReminderStatus, ScheduleBlock, Task, TaskDependency, TaskStatus, UserProfile
+from app.core.time_utils import interpret_time_reference, parse_human_time, time_window_for_context
+from app.db.models import ConversationMessage, DeadlineEvent, MessageDirection, PlanningNote, Project, Reminder, ReminderStatus, ScheduleBlock, Task, TaskDependency, TaskStatus, UserProfile
+from app.db.repositories.message_repo import list_recent_messages
 from app.db.repositories.task_repo import (
     create_task,
     create_task_dependency,
@@ -68,6 +69,7 @@ class StateEngine:
         user,
         intent: IntentResult,
         raw_text: str,
+        source_message_id=None,
     ) -> StateOutcome:
         outcome = StateOutcome(
             response_goal="open_conversation",
@@ -84,6 +86,7 @@ class StateEngine:
                 needs_time_clarification=intent.needs_clarification,
                 time_reference=intent.time_reference,
                 time_confidence=intent.time_confidence,
+                source_message_id=source_message_id,
             )
             outcome.response_goal = "acknowledge_new_task"
             outcome.emotional_tone = "direct"
@@ -296,7 +299,14 @@ class StateEngine:
                     outcome.suggested_next_step = "drop the next task you want tracked"
                 outcome.should_ask_question = False
             else:
-                matched = self._resolve_update_target(session, user.id, raw_text, intent.blockers)
+                matched = self._resolve_update_target(
+                    session,
+                    user.id,
+                    raw_text,
+                    intent.blockers,
+                    time_reference=intent.time_reference,
+                    source_message_id=source_message_id,
+                )
                 outcome.response_goal = "confirm_update"
                 outcome.emotional_tone = "direct"
                 if matched:
@@ -309,15 +319,27 @@ class StateEngine:
                             outcome.key_facts_to_include.append(f"that also clears {archived_count - 1} linked subtasks")
                         applied_change = True
                     if intent.time_reference:
-                        parsed, conf = parse_human_time(intent.time_reference, timezone=user.timezone)
-                        if parsed:
-                            matched.deadline_at = parsed
-                            matched.deadline_source_phrase = intent.time_reference
-                            matched.deadline_confidence = max(matched.deadline_confidence, conf)
-                            matched.extraction_confidence = max(matched.extraction_confidence, conf)
-                            outcome.key_facts_to_include.append(
-                                f"deadline updated for {matched.title} -> {parsed.astimezone(ZoneInfo(user.timezone)).strftime('%a %-m/%-d %-I:%M%p').lower()}"
+                        parsed_deadline = interpret_time_reference(intent.time_reference, timezone=user.timezone)
+                        if parsed_deadline.deadline_at or parsed_deadline.soft_deadline_at:
+                            action_kind = self._task_action_kind(matched)
+                            is_window_phrase = (
+                                parsed_deadline.granularity in {"hour", "part_of_day"}
+                                and not intent.time_reference.lower().strip().startswith(("by ", "before ", "due "))
                             )
+                            matched.deadline_at = parsed_deadline.deadline_at
+                            matched.soft_deadline_at = parsed_deadline.soft_deadline_at
+                            matched.start_after = parsed_deadline.soft_deadline_at if is_window_phrase else None
+                            matched.deadline_source_phrase = intent.time_reference
+                            matched.deadline_confidence = max(matched.deadline_confidence, parsed_deadline.confidence)
+                            matched.extraction_confidence = max(matched.extraction_confidence, parsed_deadline.confidence)
+                            matched.deadline_is_ambiguous = parsed_deadline.is_ambiguous
+                            matched.deadline_granularity = parsed_deadline.granularity
+                            matched.deadline_timezone = parsed_deadline.timezone or user.timezone
+                            matched.source_message_id = source_message_id or matched.source_message_id
+                            if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN} and not is_window_phrase:
+                                matched.start_after = None
+                            time_phrase = self._reschedule_phrase(parsed_deadline, intent.time_reference, user.timezone)
+                            outcome.key_facts_to_include.append(f"moved that to {time_phrase}")
                             outcome.mention_deadline = True
                             applied_change = True
                     if intent.task_updates.get("status") == "blocked" or intent.blockers:
@@ -418,6 +440,7 @@ class StateEngine:
         needs_time_clarification: bool,
         time_reference: str | None,
         time_confidence: float,
+        source_message_id,
     ) -> CaptureBundle:
         bundle = CaptureBundle()
         title_index: dict[str, Task] = {}
@@ -431,6 +454,7 @@ class StateEngine:
                 title_index=title_index,
                 parent_task=None,
                 inherited_project_id=None,
+                source_message_id=source_message_id,
             )
 
         for entry in bundle.entries:
@@ -501,6 +525,7 @@ class StateEngine:
         title_index: dict[str, Task],
         parent_task: Task | None,
         inherited_project_id,
+        source_message_id,
     ) -> Task:
         project_id = inherited_project_id
         if extracted.project:
@@ -545,6 +570,7 @@ class StateEngine:
                 title=extracted.title,
                 description=extracted.description,
                 project_id=project_id,
+                source_message_id=source_message_id,
                 parent_task_id=parent_task.id if parent_task else None,
                 next_step=next_step,
                 deadline_at=deadline_at,
@@ -576,6 +602,8 @@ class StateEngine:
                 action_kind=action_kind,
                 metadata=metadata,
             )
+            if source_message_id is not None:
+                task.source_message_id = source_message_id
 
         if not any(entry.task.id == task.id and entry.parent_task == parent_task for entry in bundle.entries):
             bundle.entries.append(CapturedTaskEntry(extracted=extracted, task=task, parent_task=parent_task))
@@ -615,6 +643,7 @@ class StateEngine:
                 title_index=title_index,
                 parent_task=task,
                 inherited_project_id=project_id,
+                source_message_id=source_message_id,
             )
             title_index.setdefault(self._normalize_title(child.title), child)
         return task
@@ -1046,7 +1075,16 @@ class StateEngine:
                 return found
         return None
 
-    def _resolve_update_target(self, session: Session, user_id, raw_text: str, blockers: list[str]) -> Task | None:
+    def _resolve_update_target(
+        self,
+        session: Session,
+        user_id,
+        raw_text: str,
+        blockers: list[str],
+        *,
+        time_reference: str | None = None,
+        source_message_id=None,
+    ) -> Task | None:
         matched = self._match_task_from_text(session, user_id, raw_text)
         if blockers and matched is not None:
             blocker_target = self._target_task_for_blocker_update(
@@ -1059,10 +1097,102 @@ class StateEngine:
                 matched = blocker_target
         if matched is not None:
             return matched
+        if time_reference and self._looks_like_timing_followup(raw_text):
+            recent = self._recent_relevant_task(
+                session,
+                user_id=user_id,
+                source_message_id=source_message_id,
+                prefer_windowed=True,
+            )
+            if recent is not None:
+                return recent
         active = list_active_tasks(session, user_id)
         if blockers and len(active) == 1:
             return active[0]
         return None
+
+    def _recent_relevant_task(self, session: Session, *, user_id, source_message_id=None, prefer_windowed: bool = False) -> Task | None:
+        recent_messages = list_recent_messages(session, user_id, limit=12)
+        inbound_messages = [
+            msg for msg in reversed(recent_messages)
+            if msg.direction == MessageDirection.inbound and msg.id != source_message_id
+        ]
+        if inbound_messages:
+            inbound_ids = [msg.id for msg in inbound_messages[:6]]
+            candidates = (
+                session.execute(
+                    select(Task)
+                    .where(
+                        Task.user_id == user_id,
+                        Task.status.in_([TaskStatus.active, TaskStatus.blocked]),
+                        Task.source_message_id.in_(tuple(inbound_ids)),
+                    )
+                    .order_by(Task.updated_at.desc(), Task.created_at.desc())
+                )
+                .scalars()
+                .all()
+            )
+            if candidates:
+                scored = sorted(
+                    candidates,
+                    key=lambda task: self._recent_task_score(task, inbound_ids, prefer_windowed=prefer_windowed),
+                    reverse=True,
+                )
+                top = scored[0]
+                if len(scored) == 1 or self._recent_task_score(top, inbound_ids, prefer_windowed=prefer_windowed) > self._recent_task_score(scored[1], inbound_ids, prefer_windowed=prefer_windowed) + 2:
+                    return top
+
+        active = list_active_tasks(session, user_id)
+        if len(active) == 1:
+            return active[0]
+        return None
+
+    def _recent_task_score(self, task: Task, inbound_ids: list, *, prefer_windowed: bool) -> int:
+        score = 0
+        try:
+            score += max(0, 10 - inbound_ids.index(task.source_message_id)) * 10 if task.source_message_id in inbound_ids else 0
+        except ValueError:
+            pass
+        if prefer_windowed and (task.start_after is not None or task.deadline_source_phrase):
+            score += 15
+        if self._task_action_kind(task) in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
+            score += 12
+        if task.last_progress_at is not None:
+            score += 2
+        return score
+
+    @staticmethod
+    def _looks_like_timing_followup(text: str) -> bool:
+        lowered = text.lower().strip()
+        if not lowered or "?" in lowered:
+            return False
+        if re.search(r"\b(actually|nah|make that|move it to|switch it to|resched(?:ule)?|instead)\b", lowered):
+            return True
+        bare = re.sub(r"^(actually|nah|make that|move it to|switch it to|instead)\s+", "", lowered).strip()
+        return bare in {
+            "tomorrow morning",
+            "tomorrow night",
+            "tonight",
+            "monday morning",
+            "monday night",
+            "tuesday morning",
+            "wednesday morning",
+            "thursday morning",
+            "friday morning",
+            "this weekend",
+            "later",
+        }
+
+    @staticmethod
+    def _reschedule_phrase(parsed_deadline, source_phrase: str, timezone_name: str) -> str:
+        phrase = humanize_window_phrase(source_phrase)
+        if phrase:
+            return phrase
+        if parsed_deadline.deadline_at is not None:
+            return parsed_deadline.deadline_at.astimezone(ZoneInfo(timezone_name)).strftime("%a %-m/%-d %-I:%M%p").lower()
+        if parsed_deadline.soft_deadline_at is not None:
+            return parsed_deadline.soft_deadline_at.astimezone(ZoneInfo(timezone_name)).strftime("%a %-m/%-d %-I:%M%p").lower()
+        return source_phrase.strip()
 
     def _refresh_task_block_state(self, task: Task) -> bool:
         unresolved = [link.predecessor_task for link in task.successor_links if link.predecessor_task.status != TaskStatus.completed]
@@ -1304,11 +1434,11 @@ class StateEngine:
         if self._looks_like_placeholder_assignment([task]):
             return f"there's a {lowered_title} in the mix"
         if action_kind == ACTION_KIND_QUICK_MESSAGE and time_phrase:
-            return f"{quick_subject} is set for {time_phrase}"
+            return f"i won't let you forget {time_phrase}"
         if action_kind == ACTION_KIND_QUICK_ADMIN and time_phrase:
-            return f"{quick_subject} is set for {time_phrase}"
+            return f"i've got you for {time_phrase}"
         if action_kind in {ACTION_KIND_QUICK_MESSAGE, ACTION_KIND_QUICK_ADMIN}:
-            return f"got {quick_subject}"
+            return "got you"
         return f"got {task.title}"
 
     @staticmethod

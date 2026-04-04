@@ -196,6 +196,14 @@ def test_delete_task_language_maps_to_archive_update_action():
     assert result.task_updates.get("action") == "archive"
 
 
+def test_followup_time_correction_maps_to_update_not_new_task():
+    extractor = IntentExtractor()
+    result = extractor.extract("actually monday morning", "America/New_York")
+    assert result.intent == "update_task"
+    assert result.time_reference == "monday morning"
+    assert result.task_updates.get("action") == "reschedule"
+
+
 def test_fallback_multitask_split_keeps_clean_titles_with_trailing_preposition_removed():
     extractor = IntentExtractor()
     result = extractor.extract(

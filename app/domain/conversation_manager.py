@@ -102,6 +102,7 @@ class ConversationManager:
                 user=user,
                 intent=intent,
                 raw_text=payload.body,
+                source_message_id=inbound_msg.id,
             )
             logger.info("state applied sid=%s elapsed=%.2fs", payload.message_sid, time.monotonic() - started)
 

@@ -7,6 +7,8 @@ import pytest
 from sqlalchemy import select
 
 from app.db.models import Task, User
+from app.db.models import MessageDirection
+from app.db.repositories.message_repo import create_message
 from app.db.repositories.task_repo import create_task
 from app.domain.state_engine import StateEngine
 from app.domain.timeline_service import TimelineService
@@ -240,3 +242,55 @@ def test_behavior_matrix_plain_language_updates_still_work(db_session):
     archived = db_session.execute(select(Task).where(Task.title == "Fix website")).scalars().one()
     assert archived.status.value == "archived"
     assert archive.response_goal == "confirm_update"
+
+
+def test_behavior_matrix_followup_reschedule_updates_same_reminder_task(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    engine = StateEngine()
+
+    first_message = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="yo dont let me forget to email the scout recruiter tmr morning",
+        external_id="SM_MATRIX_1",
+    )
+    first_intent = IntentResult(
+        intent="add_task",
+        confidence=0.92,
+        task=ExtractedTask(
+            title="Email the scout recruiter",
+            deadline_text="tomorrow morning",
+            action_kind="quick_message",
+        ),
+    )
+    engine.apply_intent(
+        db_session,
+        user=user,
+        intent=first_intent,
+        raw_text="yo dont let me forget to email the scout recruiter tmr morning",
+        source_message_id=first_message.id,
+    )
+
+    second_message = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="actually monday morning",
+        external_id="SM_MATRIX_2",
+    )
+    second_intent = IntentExtractor().extract("actually monday morning", user.timezone)
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=second_intent,
+        raw_text="actually monday morning",
+        source_message_id=second_message.id,
+    )
+    db_session.commit()
+
+    tasks = db_session.execute(select(Task).where(Task.user_id == user.id)).scalars().all()
+    assert len(tasks) == 1
+    assert tasks[0].deadline_source_phrase == "monday morning"
+    assert outcome.key_facts_to_include == ["moved that to monday morning"]

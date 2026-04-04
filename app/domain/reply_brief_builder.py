@@ -67,6 +67,9 @@ class ReplyBriefBuilder:
             # The brief already has the newly captured task fact + next step.
             active_task_context = []
             deadline_context = []
+        if outcome.response_goal == "confirm_update" and self._looks_like_clean_reschedule(outcome):
+            active_task_context = []
+            deadline_context = []
         if short_checkin:
             active_task_context = []
             deadline_context = []
@@ -182,3 +185,9 @@ class ReplyBriefBuilder:
             .all()
         )
         return [f"{b.block_type} until {b.ends_at.isoformat()}" for b in blocks]
+
+    @staticmethod
+    def _looks_like_clean_reschedule(outcome: StateOutcome) -> bool:
+        if outcome.should_ask_question or outcome.should_push_for_action:
+            return False
+        return any(fact.lower().startswith("moved that to ") for fact in outcome.key_facts_to_include)

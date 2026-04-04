@@ -6,8 +6,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 
 from app.db.models import PlanningNote, Reminder, ReminderStatus, ScheduleBlock, Task, TaskDependency, TaskStatus, User
+from app.db.repositories.message_repo import create_message
 from app.db.repositories.task_repo import create_task, create_task_dependency
 from app.domain.state_engine import StateEngine
+from app.db.models import MessageDirection
 from app.schemas.intent import ExtractedTask, IntentResult
 
 
@@ -209,7 +211,98 @@ def test_quick_message_windowed_task_does_not_push_fake_prep_step(db_session):
     assert outcome.response_goal == "acknowledge_new_task"
     assert outcome.should_push_for_action is False
     assert outcome.suggested_next_step is None
-    assert any("texting roommate back is set for tomorrow morning" in fact.lower() for fact in outcome.key_facts_to_include)
+    assert any("won't let you forget tomorrow morning" in fact.lower() for fact in outcome.key_facts_to_include)
+
+
+def test_new_task_links_to_source_message_for_followup_context(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    inbound = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="dont let me forget to email the scout recruiter tmr morning",
+        external_id="SM_TEST_FOLLOWUP",
+    )
+    engine = StateEngine()
+    intent = IntentResult(
+        intent="add_task",
+        confidence=0.9,
+        task=ExtractedTask(
+            title="Email the scout recruiter",
+            deadline_text="tomorrow morning",
+            action_kind="quick_message",
+        ),
+    )
+    engine.apply_intent(
+        db_session,
+        user=user,
+        intent=intent,
+        raw_text="dont let me forget to email the scout recruiter tmr morning",
+        source_message_id=inbound.id,
+    )
+    db_session.commit()
+
+    stored = db_session.execute(select(Task).where(Task.title == "Email the scout recruiter")).scalars().one()
+    assert stored.source_message_id == inbound.id
+
+
+def test_time_only_followup_updates_recent_relevant_task_instead_of_creating_new_one(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    first_inbound = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="dont let me forget to email the scout recruiter tmr morning",
+        external_id="SM_TEST_FIRST",
+    )
+    engine = StateEngine()
+    add_intent = IntentResult(
+        intent="add_task",
+        confidence=0.92,
+        task=ExtractedTask(
+            title="Email the scout recruiter",
+            deadline_text="tomorrow morning",
+            action_kind="quick_message",
+        ),
+    )
+    engine.apply_intent(
+        db_session,
+        user=user,
+        intent=add_intent,
+        raw_text="dont let me forget to email the scout recruiter tmr morning",
+        source_message_id=first_inbound.id,
+    )
+    second_inbound = create_message(
+        db_session,
+        user_id=user.id,
+        direction=MessageDirection.inbound,
+        body="actually monday morning",
+        external_id="SM_TEST_SECOND",
+    )
+    update_intent = IntentResult(
+        intent="update_task",
+        confidence=0.9,
+        time_reference="monday morning",
+        task_updates={"action": "reschedule"},
+    )
+    outcome = engine.apply_intent(
+        db_session,
+        user=user,
+        intent=update_intent,
+        raw_text="actually monday morning",
+        source_message_id=second_inbound.id,
+    )
+    db_session.commit()
+
+    tasks = db_session.execute(select(Task).where(Task.user_id == user.id)).scalars().all()
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task.deadline_source_phrase == "monday morning"
+    assert task.source_message_id == second_inbound.id
+    assert outcome.response_goal == "confirm_update"
+    assert outcome.key_facts_to_include == ["moved that to monday morning"]
 
 
 def test_default_next_step_does_not_repeat_submit_for_submit_titles():

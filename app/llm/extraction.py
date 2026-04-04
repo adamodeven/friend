@@ -126,6 +126,16 @@ class IntentExtractor:
                 summary=f"task update action requested: {update_action}",
                 task_updates={"action": update_action},
             )
+        followup_time_reference = self._extract_followup_time_update(lowered, timezone)
+        if followup_time_reference:
+            return IntentResult(
+                intent="update_task",
+                confidence=0.9,
+                summary="follow-up timing correction",
+                time_reference=followup_time_reference,
+                time_confidence=0.85,
+                task_updates={"action": "reschedule"},
+            )
         timeline_query_cues = [
             "what do i have",
             "what's due",
@@ -799,6 +809,27 @@ class IntentExtractor:
     def _detect_update_action(text: str) -> str | None:
         if re.search(r"\b(delete|remove|drop|archive)\b.*\b(task|todo|to-do)?\b", text):
             return "archive"
+        return None
+
+    @classmethod
+    def _extract_followup_time_update(cls, text: str, timezone: str) -> str | None:
+        if "?" in text:
+            return None
+        working = text.strip()
+        if not working:
+            return None
+        cue_match = re.match(r"^(actually|nah|make that|move it to|switch it to|instead)\s+(.+)$", working)
+        if cue_match:
+            candidate = cue_match.group(2).strip()
+        else:
+            candidate = working
+            if re.search(r"\b(need to|have to|gotta|must|should|want to|submit|finish|send|write|prepare|study|review|fix|build|make|do|call|email|text|update|work on|start|complete|wrap|clean|buy|plan|schedule|reply|apply|pay|draft|upload|design|model|export|print)\b", working):
+                return None
+            if len(re.findall(r"[a-z0-9']+", working)) > 4:
+                return None
+        parsed = interpret_time_reference(candidate, timezone=timezone)
+        if parsed.source_phrase and (parsed.deadline_at or parsed.soft_deadline_at):
+            return candidate
         return None
 
     @staticmethod

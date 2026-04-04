@@ -112,6 +112,9 @@ def _parse_special_time_phrase(
     context_anchors: Mapping[str, datetime | tuple[datetime, datetime]] | None,
     source_phrase: str,
 ) -> ParsedDeadline | None:
+    weekday_part = _parse_weekday_part_phrase(text, base=base, timezone=timezone, source_phrase=source_phrase)
+    if weekday_part is not None:
+        return weekday_part
     if "tomorrow morning" in text:
         start = _at_local(base, days=1, hour=8, minute=0)
         return _build_deadline(
@@ -227,6 +230,55 @@ def _parse_special_time_phrase(
     return None
 
 
+def _parse_weekday_part_phrase(text: str, *, base: datetime, timezone: str, source_phrase: str) -> ParsedDeadline | None:
+    match = re.search(
+        r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+(morning|afternoon|evening|night))?\b",
+        text,
+    )
+    if not match:
+        return None
+
+    weekday_name = match.group(1)
+    part_of_day = match.group(2)
+    target = _next_named_day(base, weekday_name)
+
+    if part_of_day == "morning":
+        return _build_deadline(
+            source_phrase=source_phrase,
+            timezone=timezone,
+            deadline_at=target.replace(hour=11, minute=0, second=0, microsecond=0),
+            soft_deadline_at=target.replace(hour=8, minute=0, second=0, microsecond=0),
+            confidence=0.8,
+            granularity="part_of_day",
+        )
+    if part_of_day == "afternoon":
+        return _build_deadline(
+            source_phrase=source_phrase,
+            timezone=timezone,
+            deadline_at=target.replace(hour=15, minute=0, second=0, microsecond=0),
+            soft_deadline_at=target.replace(hour=13, minute=0, second=0, microsecond=0),
+            confidence=0.78,
+            granularity="part_of_day",
+        )
+    if part_of_day in {"evening", "night"}:
+        return _build_deadline(
+            source_phrase=source_phrase,
+            timezone=timezone,
+            deadline_at=target.replace(hour=21, minute=0, second=0, microsecond=0),
+            soft_deadline_at=target.replace(hour=18, minute=0, second=0, microsecond=0),
+            confidence=0.79,
+            granularity="part_of_day",
+        )
+    return _build_deadline(
+        source_phrase=source_phrase,
+        timezone=timezone,
+        deadline_at=target.replace(hour=17, minute=0, second=0, microsecond=0),
+        soft_deadline_at=target.replace(hour=9, minute=0, second=0, microsecond=0),
+        confidence=0.72,
+        granularity="day",
+    )
+
+
 def _normalize_base(*, relative_base: datetime | None, zone: ZoneInfo) -> datetime:
     if relative_base is None:
         return now_tz(zone.key)
@@ -281,6 +333,23 @@ def _next_weekend_anchor(base: datetime, *, day_index: int, hour: int, minute: i
     target = _at_local(base, days=days_until, hour=hour, minute=minute)
     if target <= base:
         target = _at_local(base, days=days_until + 7, hour=hour, minute=minute)
+    return target
+
+
+def _next_named_day(base: datetime, weekday_name: str) -> datetime:
+    day_indexes = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+    }
+    days_until = (day_indexes[weekday_name] - base.weekday()) % 7
+    target = _at_local(base, days=days_until, hour=9, minute=0)
+    if target <= base:
+        target = _at_local(base, days=days_until + 7, hour=9, minute=0)
     return target
 
 

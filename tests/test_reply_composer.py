@@ -679,3 +679,16 @@ def test_confirm_update_fallback_keeps_timing_shift_natural():
     )
     lowered = " ".join(reply.messages).lower()
     assert lowered == "okay monday morning"
+
+
+def test_postprocess_drops_redundant_ack_after_timing_shift():
+    brief = ReplyBrief(
+        response_goal="confirm_update",
+        latest_user_message="actually monday morning",
+        generated_at=datetime.now(),
+    )
+    messages = ConversationComposer._postprocess_messages(  # noqa: SLF001
+        ["okay monday morning", "got it"],
+        brief,
+    )
+    assert messages == ["okay monday morning"]

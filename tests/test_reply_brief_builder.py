@@ -203,3 +203,24 @@ def test_reschedule_confirmation_omits_unrelated_task_context(db_session):
 
     assert brief.active_task_context == []
     assert brief.deadline_context == []
+
+
+def test_timeline_summary_omits_unrelated_deadline_context(db_session):
+    user = db_session.execute(select(User)).scalars().first()
+    assert user is not None
+    db_session.add(Task(user_id=user.id, title="Fix website", status=TaskStatus.active, priority=5))
+    db_session.commit()
+
+    builder = ReplyBriefBuilder()
+    brief = builder.build(
+        db_session,
+        user=user,
+        latest_user_message="what do i have tomorrow morning",
+        outcome=StateOutcome(
+            response_goal="timeline_summary",
+            key_facts_to_include=["tomorrow morning is open right now."],
+        ),
+    )
+
+    assert brief.active_task_context == []
+    assert brief.deadline_context == []

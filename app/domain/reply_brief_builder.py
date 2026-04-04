@@ -67,6 +67,12 @@ class ReplyBriefBuilder:
             # The brief already has the newly captured task fact + next step.
             active_task_context = []
             deadline_context = []
+        if outcome.response_goal == "timeline_summary":
+            # The state layer already built the requested window/plan summary.
+            # Leaving general task/deadline context in here can make the composer
+            # drag unrelated items back into a narrow question like tomorrow morning.
+            active_task_context = []
+            deadline_context = []
         if outcome.response_goal == "confirm_update" and self._looks_like_clean_reschedule(outcome, latest_user_message):
             active_task_context = []
             deadline_context = []

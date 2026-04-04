@@ -794,6 +794,10 @@ class ConversationComposer:
             return []
         if brief.response_goal == "answer_question" and first.endswith("?") and len(messages) > 1:
             return messages[1:]
+        if brief.response_goal == "confirm_update" and cls._looks_like_timing_shift_reply(brief, first):
+            messages = [message for idx, message in enumerate(messages) if idx == 0 or not cls._is_redundant_ack_bubble(message)]
+            if messages:
+                return messages[:1] if cls._looks_like_timing_shift_reply(brief, messages[0]) else messages
         return messages
 
     @classmethod
@@ -885,6 +889,19 @@ class ConversationComposer:
             return False
         lowered_fact = first_fact.lower()
         return lowered_fact.startswith(("okay ", "tomorrow", "monday", "tonight", "this ", "next "))
+
+    @staticmethod
+    def _is_redundant_ack_bubble(message: str) -> bool:
+        lowered = message.strip().lower().strip(".!?")
+        return lowered in {
+            "got it",
+            "bet",
+            "locked in",
+            "sounds good",
+            "done",
+            "for sure",
+            "copy",
+        }
 
     @staticmethod
     def _clean_candidate_text(text: str) -> str:
